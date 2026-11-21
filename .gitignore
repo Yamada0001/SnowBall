@@ -59,6 +59,3 @@ run
 
 !gradle/wrapper/gradle-wrapper.jar
 !scripts/*.sh
-
-# 移植参考用第三方模组源码（本地克隆，不纳入版本控制）
-/需要移植的MOD/
