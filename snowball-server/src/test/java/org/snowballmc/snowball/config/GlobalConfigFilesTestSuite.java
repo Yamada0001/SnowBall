@@ -53,7 +53,20 @@ class GlobalConfigFilesTestSuite {
         "settings.performance.cerulean-ignore-decreased-stacks",
         "settings.performance.cerulean-init-last-slots",
         "settings.fix.spear-charge-contact-cooldown",
-        "settings.fix.spear-charge-dragon-hit-part"
+        "settings.fix.spear-charge-dragon-hit-part",
+        "settings.performance.skip-generic-game-event-without-listeners",
+        "settings.performance.skip-block-physics-event-without-listeners",
+        "settings.performance.optimize-chunk-packet-construction",
+        "settings.performance.skip-inventory-change-without-listeners",
+        "settings.performance.optimize-mob-spawning",
+        "settings.fix.fix-skeleton-horse-trap-goal",
+        "settings.fix.propagate-block-destruction-cancellation",
+        "settings.async.async-mob-spawning.enabled",
+        "settings.async.async-pathfinding.enabled",
+        "settings.async.async-pathfinding.max-threads",
+        "settings.async.async-pathfinding.keepalive",
+        "settings.async.async-pathfinding.queue-size",
+        "settings.async.async-pathfinding.reject-policy"
     );
 
     @TempDir
@@ -76,6 +89,14 @@ class GlobalConfigFilesTestSuite {
         assertEquals(LeavesUpdateHelper.DOWNLOAD_REPOSITORY, files.leaves().getString(SOURCE));
         assertFalse(files.leaves().contains(WEB));
         assertTrue(files.leaves().contains("settings.modify.snowball-and-egg-can-knockback-player"));
+        assertTrue(files.snowball().getBoolean("settings.performance.skip-generic-game-event-without-listeners"));
+        assertFalse(files.snowball().getBoolean("settings.async.async-mob-spawning.enabled"));
+        String pathfinding = "settings.async.async-pathfinding.";
+        assertFalse(files.snowball().getBoolean(pathfinding + "enabled"));
+        assertEquals(0, files.snowball().getInt(pathfinding + "max-threads"));
+        assertEquals(60, files.snowball().getInt(pathfinding + "keepalive"));
+        assertEquals(0, files.snowball().getInt(pathfinding + "queue-size"));
+        assertEquals("AUTO", files.snowball().getString(pathfinding + "reject-policy"));
     }
 
     @Test

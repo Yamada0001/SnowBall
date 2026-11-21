@@ -1,0 +1,335 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sat, 21 Nov 2026 12:00:00 +0000
+Subject: [PATCH] Mob spawning optimizations
+
+Async counting: based on Kevin Raneri's Pufferfish patch (GPL-3.0-only),
+including Leaf 0077's fixes co-authored by booky10 <boooky10@gmail.com>.
+Original project: https://github.com/pufferfish-gg/Pufferfish
+Original author: Kevin Raneri <kevin.raneri@gmail.com>
+
+Sync changes: conservative subset of Leaf 0208 by hayanesuru
+<hayanesuru@outlook.jp> (Leaf patch license: MIT).
+Original project: https://github.com/Winds-Studio/Leaf
+
+Do not carry live entity, chunk, biome, or player objects into the worker.
+Keep all spawn decisions and callbacks on the server thread. Keep Paper's
+chunk collection, RNG sequence, border/loaded checks, and event order.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -982,6 +982,21 @@
+     private boolean hasStopped = false;
+     private boolean hasLoggedStop = false; // Paper - Debugging
+     private final Object stopLock = new Object();
++    // SnowBall start - async natural spawn counts
++    private java.util.concurrent.@Nullable ThreadPoolExecutor naturalSpawnCountExecutor;
++
++    public final java.util.concurrent.@Nullable Executor getNaturalSpawnCountExecutor() {
++        synchronized (this.stopLock) {
++            if (this.hasStopped || !org.snowballmc.snowball.LeavesConfig.async.asyncMobSpawning.enabled) {
++                return null;
++            }
++            if (this.naturalSpawnCountExecutor == null) {
++                this.naturalSpawnCountExecutor = org.snowballmc.snowball.util.NaturalSpawnCountPipeline.newExecutor();
++            }
++            return this.naturalSpawnCountExecutor;
++        }
++    }
++    // SnowBall end - async natural spawn counts
+     public final boolean hasStopped() {
+         synchronized (this.stopLock) {
+             return this.hasStopped;
+@@ -995,6 +1010,9 @@
+         synchronized (this.stopLock) {
+             if (this.hasStopped) return;
+             this.hasStopped = true;
++            if (this.naturalSpawnCountExecutor != null) {
++                this.naturalSpawnCountExecutor.shutdownNow(); // SnowBall - async natural spawn counts
++            }
+         }
+         if (!this.hasLoggedStop && this.isDebugging()) io.papermc.paper.util.TraceUtil.dumpTraceForThread("Server stopped"); // Paper - Debugging
+         this.shutdownThread = Thread.currentThread(); // Paper - Improved watchdog support
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -52,6 +52,8 @@
+ import net.minecraft.world.level.storage.LevelStorageSource;
+ import net.minecraft.world.level.storage.SavedDataStorage;
+ import org.jspecify.annotations.Nullable;
++import org.snowballmc.snowball.LeavesConfig; // SnowBall - optimize mob spawning
++import org.snowballmc.snowball.util.NaturalSpawnCountPipeline; // SnowBall - async natural spawn counts
+ import org.slf4j.Logger;
+ 
+ public class ServerChunkCache extends ChunkSource implements ca.spottedleaf.moonrise.patches.chunk_system.world.ChunkSystemServerChunkCache { // Paper - rewrite chunk system
+@@ -70,10 +72,12 @@
+     private final long[] lastChunkPos = new long[4];
+     private final @Nullable ChunkStatus[] lastChunkStatus = new ChunkStatus[4];
+     private final @Nullable ChunkAccess[] lastChunk = new ChunkAccess[4];
+-    private final List<LevelChunk> spawningChunks = new ObjectArrayList<>();
++    private final ObjectArrayList<LevelChunk> spawningChunks = new ObjectArrayList<>(); // SnowBall - optimize mob spawning
+     private final Set<ChunkHolder> chunkHoldersToBroadcast = new ReferenceOpenHashSet<>();
+     @VisibleForDebug
+     private NaturalSpawner.@Nullable SpawnState lastSpawnState;
++    private final NaturalSpawnCountPipeline.Pending pendingNaturalSpawnCount = new NaturalSpawnCountPipeline.Pending(); // SnowBall - async natural spawn counts
++    private boolean asyncNaturalSpawnCountFailed; // SnowBall - async natural spawn counts
+     // Paper start
+     public final ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable<net.minecraft.world.level.chunk.LevelChunk> fullChunks = ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable.createWithCapacity(ca.spottedleaf.concurrentutil.map.concurrent.longs.ConcurrentChainedLong2ReferenceHashTable.defaultCapacity(), 0.25f);
+     public int getFullChunksCount() {
+@@ -472,6 +476,7 @@
+     }
+ 
+     public void close(boolean save) throws IOException {
++        this.pendingNaturalSpawnCount.discard(); // SnowBall - async natural spawn counts
+         // Paper - rewrite chunk system
+         // CraftBukkit end
+         this.savedDataStorage.close();
+@@ -547,9 +552,18 @@
+     private void tickChunks(final ProfilerFiller profiler) {
+         profiler.push("naturalSpawnCount");
+         int chunkCount = this.distanceManager.getNaturalSpawnChunkCount();
++        // SnowBall start - async natural spawn counts
++        final boolean perPlayerCount = (this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns;
++        final boolean asyncCount = LeavesConfig.async.asyncMobSpawning.enabled && !this.asyncNaturalSpawnCountFailed
++            && perPlayerCount && !this.level.players().isEmpty() && this.level.getGameRules().get(GameRules.SPAWN_MOBS);
++        final int tick = asyncCount ? this.level.getServer().getTickCount() : 0;
++        if (!asyncCount) {
++            this.pendingNaturalSpawnCount.discard();
++        }
++        // SnowBall end - async natural spawn counts
+         // Paper start - Optional per player mob spawns
+         NaturalSpawner.SpawnState spawnCookie;
+-        if ((this.spawnFriendlies || this.spawnEnemies) && this.level.paperConfig().entities.spawning.perPlayerMobSpawns) { // don't count mobs when animals and monsters are disabled
++        if (perPlayerCount) { // don't count mobs when animals and monsters are disabled
+             // re-set mob counts
+             for (ServerPlayer player : this.level.players()) {
+                 // Paper start - per player mob spawning backoff
+@@ -564,7 +578,14 @@
+                 }
+                 // Paper end - per player mob spawning backoff
+             }
+-            spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, null, true);
++            // SnowBall start - async natural spawn counts
++            final NaturalSpawnCountPipeline.Result snapshotCounts = asyncCount
++                ? this.pendingNaturalSpawnCount.take(tick, this.countAllMobsForNaturalSpawning(), this::onNaturalSpawnCountFailure)
++                : null;
++            spawnCookie = snapshotCounts == null
++                ? NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, null, true)
++                : NaturalSpawner.applyNaturalSpawnCounts(chunkCount, this.level, snapshotCounts);
++            // SnowBall end - async natural spawn counts
+         } else {
+             spawnCookie = NaturalSpawner.createState(chunkCount, this.level, this::getFullChunk, !this.level.paperConfig().entities.spawning.perPlayerMobSpawns ? new LocalMobCapCalculator(this.chunkMap) : null, false);
+         }
+@@ -588,7 +609,7 @@
+             spawningCategories = List.of();
+         }
+ 
+-        List<LevelChunk> spawningChunks = this.spawningChunks;
++        ObjectArrayList<LevelChunk> spawningChunks = this.spawningChunks; // SnowBall - optimize mob spawning
+ 
+         try {
+             profiler.popPush("filteringSpawningChunks");
+@@ -600,9 +621,18 @@
+             // Paper end - chunk tick iteration optimisation
+             profiler.popPush("tickSpawningChunks");
+ 
+-            for (LevelChunk chunk : spawningChunks) {
+-                this.tickSpawningChunk(chunk, spawningCategories, spawnCookie);
+-            }
++            // SnowBall start - optimize mob spawning
++            if (LeavesConfig.performance.optimizeMobSpawning) {
++                final Object[] chunks = spawningChunks.elements();
++                for (int i = 0, size = spawningChunks.size(); i < size; i++) {
++                    this.tickSpawningChunk((LevelChunk) chunks[i], spawningCategories, spawnCookie);
++                }
++            } else {
++                for (LevelChunk chunk : spawningChunks) {
++                    this.tickSpawningChunk(chunk, spawningCategories, spawnCookie);
++                }
++            }
++            // SnowBall end - optimize mob spawning
+         } finally {
+             spawningChunks.clear();
+         }
+@@ -614,7 +644,31 @@
+             this.level.tickCustomSpawners(this.spawnEnemies);
+         }
+ 
++        // SnowBall start - async natural spawn counts
++        if (asyncCount && !this.asyncNaturalSpawnCountFailed && this.pendingNaturalSpawnCount.canSubmit()) {
++            final java.util.concurrent.Executor worker = this.level.getServer().getNaturalSpawnCountExecutor();
++            if (worker != null) {
++                profiler.popPush("snapshotNaturalSpawnCount");
++                try {
++                    final boolean countAllMobs = this.countAllMobsForNaturalSpawning();
++                    final NaturalSpawnCountPipeline.Snapshot snapshot = NaturalSpawner.captureNaturalSpawnCounts(this.level, this::getFullChunk, countAllMobs);
++                    this.pendingNaturalSpawnCount.submit(worker, tick, countAllMobs, snapshot);
++                } catch (final RuntimeException failure) {
++                    this.onNaturalSpawnCountFailure(failure);
++                }
++            }
++        }
++        // SnowBall end - async natural spawn counts
+         profiler.pop();
++    }
++
++    private boolean countAllMobsForNaturalSpawning() {
++        return LeavesConfig.modify.mcTechnicalMode || this.level.paperConfig().entities.spawning.countAllMobsForSpawning;
++    }
++
++    private void onNaturalSpawnCountFailure(final Throwable failure) {
++        this.asyncNaturalSpawnCountFailed = true;
++        net.minecraft.server.MinecraftServer.LOGGER.warn("Async natural spawn count failed in {}; using synchronous counts", this.level.dimension().identifier(), failure);
+     }
+ 
+     private void tickSpawningChunk(final LevelChunk chunk, final List<MobCategory> spawningCategories, final NaturalSpawner.SpawnState spawnCookie) {
+diff --git a/net/minecraft/world/level/NaturalSpawner.java b/net/minecraft/world/level/NaturalSpawner.java
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -51,6 +51,8 @@
+ import net.minecraft.world.level.storage.LevelData;
+ import net.minecraft.world.phys.Vec3;
+ import org.jspecify.annotations.Nullable;
++import org.snowballmc.snowball.LeavesConfig; // SnowBall - optimize mob spawning
++import org.snowballmc.snowball.util.NaturalSpawnCountPipeline; // SnowBall - async natural spawn counts
+ import org.slf4j.Logger;
+ 
+ public final class NaturalSpawner {
+@@ -121,6 +123,79 @@
+         return new NaturalSpawner.SpawnState(spawnableChunkCount, mobCounts, spawnPotential, localMobCapCalculator);
+     }
+ 
++    // SnowBall start - async natural spawn counts
++    private static @Nullable MobCategory countableCategory(final Entity entity) {
++        if (entity instanceof Mob mob && (mob.isPersistenceRequired() || mob.requiresCustomPersistence())) {
++            return null;
++        }
++        final MobCategory category = entity.getType().getCategory();
++        return category == MobCategory.MISC ? null : category;
++    }
++
++    private static boolean isNaturalSpawn(final Entity entity) {
++        return entity.spawnReason == org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.NATURAL
++            || entity.spawnReason == org.bukkit.event.entity.CreatureSpawnEvent.SpawnReason.CHUNK_GEN;
++    }
++
++    private static double initialCharge(final ServerLevel level, final EntityType<?> type, final BlockPos pos) {
++        final MobSpawnSettings settings = level.environmentAttributes().getValue(EnvironmentAttributes.NATURAL_MOB_SPAWNS, pos);
++        final MobSpawnSettings.MobSpawnCost cost = settings.getMobSpawnCost(type);
++        return cost == null ? 0.0 : cost.charge();
++    }
++
++    /** Evaluate the live eligibility and spawn costs before handing only values to the worker. */
++    public static NaturalSpawnCountPipeline.Snapshot captureNaturalSpawnCounts(
++        final ServerLevel level, final NaturalSpawner.ChunkGetter chunkGetter, final boolean countAllMobs
++    ) {
++        final List<NaturalSpawnCountPipeline.Sample> samples = new ArrayList<>();
++        for (final Entity entity : level.getAllEntities()) {
++            final MobCategory category = countableCategory(entity);
++            if (category == null || (!countAllMobs && !isNaturalSpawn(entity))) {
++                continue;
++            }
++            final BlockPos pos = entity.blockPosition();
++            chunkGetter.query(ChunkPos.pack(pos), chunk -> samples.add(new NaturalSpawnCountPipeline.Sample(
++                entity.chunkPosition().pack(), category.ordinal(), pos.getX(), pos.getY(), pos.getZ(), initialCharge(level, entity.getType(), pos)
++            )));
++        }
++        return new NaturalSpawnCountPipeline.Snapshot(net.minecraft.server.level.ServerPlayer.MOBCATEGORY_TOTAL_ENUMS, samples);
++    }
++
++    /** Apply the previous tick's sampled populations to the current nearby-player map. */
++    public static NaturalSpawner.SpawnState applyNaturalSpawnCounts(
++        final int spawnableChunkCount, final ServerLevel level, final NaturalSpawnCountPipeline.Result result
++    ) {
++        final Object2IntOpenHashMap<MobCategory> mobCounts = new Object2IntOpenHashMap<>();
++        for (final MobCategory category : SPAWNING_CATEGORIES) {
++            final int count = result.count(category.ordinal());
++            if (count != 0) {
++                mobCounts.put(category, count);
++            }
++        }
++        final PotentialCalculator spawnPotential = new PotentialCalculator();
++        for (final NaturalSpawnCountPipeline.Sample sample : result.charges()) {
++            spawnPotential.addCharge(new BlockPos(sample.x(), sample.y(), sample.z()), sample.charge());
++        }
++        final ca.spottedleaf.moonrise.common.misc.NearbyPlayers nearbyPlayers = level.moonrise$getNearbyPlayers();
++        for (final NaturalSpawnCountPipeline.ChunkPopulation chunk : result.chunks()) {
++            final long key = chunk.chunkKey();
++            final ca.spottedleaf.moonrise.common.list.ReferenceList<net.minecraft.server.level.ServerPlayer> inRange = nearbyPlayers.getPlayersByChunk(
++                ChunkPos.getX(key), ChunkPos.getZ(key), ca.spottedleaf.moonrise.common.misc.NearbyPlayers.NearbyMapType.TICK_VIEW_DISTANCE
++            );
++            if (inRange != null) {
++                final net.minecraft.server.level.ServerPlayer[] players = inRange.getRawDataUnchecked();
++                for (int i = 0, size = inRange.size(); i < size; i++) {
++                    final int[] counts = players[i].mobCounts;
++                    for (int category = 0; category < counts.length; category++) {
++                        counts[category] += chunk.count(category);
++                    }
++                }
++            }
++        }
++        return new NaturalSpawner.SpawnState(spawnableChunkCount, mobCounts, spawnPotential, null);
++    }
++    // SnowBall end - async natural spawn counts
++
+     public static List<MobCategory> getFilteredSpawningCategories(
+         final NaturalSpawner.SpawnState state, final boolean spawnFriendlies, final boolean spawnEnemies, final boolean spawnPersistent, final ServerLevel level // CraftBukkit - add level/spawnFriendlies
+     ) {
+@@ -260,6 +335,7 @@
+         StructureManager structureManager = level.structureManager();
+         ChunkGenerator generator = level.getChunkSource().getGenerator();
+         int yStart = start.getY();
++        final boolean optimize = LeavesConfig.performance.optimizeMobSpawning; // SnowBall - optimize mob spawning
+         BlockState state = level.getBlockStateIfLoadedAndInBounds(start); // Paper - don't load chunks for mob spawn
+         if (state != null && !state.isRedstoneConductor(chunk, start)) { // Paper - don't load chunks for mob spawn
+             BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+@@ -283,10 +359,10 @@
+                     Player nearestPlayer = level.getNearestPlayer(xx, yStart, zz, -1.0, false);
+                     if (nearestPlayer != null) {
+                         double nearestPlayerDistanceSqr = nearestPlayer.distanceToSqr(xx, yStart, zz);
+-                        if (level.isLoadedAndInBounds(pos) && isRightDistanceToPlayerAndSpawnPoint(level, chunk, pos, nearestPlayerDistanceSqr)) { // Paper - don't load chunks for mob spawn
++                        if (level.isLoadedAndInBounds(pos) && isRightDistanceToPlayerAndSpawnPoint(level, chunk, pos, nearestPlayerDistanceSqr, optimize)) { // Paper - don't load chunks for mob spawn
+                             if (currentSpawnData == null) {
+                                 Optional<MobSpawnSettings.SpawnerData> nextSpawnData = getRandomSpawnMobAt(
+-                                    level, structureManager, generator, mobCategory, level.random, pos
++                                    level, structureManager, generator, mobCategory, level.random, pos, optimize
+                                 );
+                                 if (nextSpawnData.isEmpty()) {
+                                     break;
+@@ -350,7 +426,7 @@
+     }
+ 
+     private static boolean isRightDistanceToPlayerAndSpawnPoint(
+-        final ServerLevel level, final ChunkAccess chunk, final BlockPos.MutableBlockPos pos, final double nearestPlayerDistanceSqr
++        final ServerLevel level, final ChunkAccess chunk, final BlockPos.MutableBlockPos pos, final double nearestPlayerDistanceSqr, final boolean optimize
+     ) {
+         if (nearestPlayerDistanceSqr <= 576.0) {
+             return false;
+@@ -362,6 +438,10 @@
+             return false;
+         }
+ 
++        // SnowBall - optimize mob spawning: avoid allocating a ChunkPos for the common same-chunk check.
++        if (optimize && ChunkPos.pack(pos) == chunk.getPos().pack()) {
++            return true;
++        }
+         ChunkPos chunkPos = ChunkPos.containing(pos);
+         return Objects.equals(chunkPos, chunk.getPos()) || level.canSpawnEntitiesInChunk(chunkPos);
+     }
+@@ -436,8 +516,13 @@
+         final ChunkGenerator generator,
+         final MobCategory mobCategory,
+         final RandomSource random,
+-        final BlockPos pos
+-    ) {
++        final BlockPos pos,
++        final boolean optimize
++    ) {
++        // SnowBall - optimize mob spawning: only water ambient spawns consult this biome tag.
++        if (optimize && mobCategory != MobCategory.WATER_AMBIENT) {
++            return mobsAt(level, structureManager, generator, mobCategory, pos).getRandom(random);
++        }
+         Holder<Biome> biome = level.getBiome(pos);
+         return mobCategory == MobCategory.WATER_AMBIENT && biome.is(BiomeTags.REDUCED_WATER_AMBIENT_SPAWNS) && random.nextFloat() < 0.98F
+             ? Optional.empty()

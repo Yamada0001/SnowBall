@@ -1,0 +1,217 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowballMC <noreply@snowballmc.org>
+Date: Sat, 21 Nov 2026 12:00:00 +0000
+Subject: [PATCH] Offload bounded flat ground path recomputations
+
+Motivated by Leaf 0092, Petal: Async Pathfinding (peaches94, fixed/updated
+by KaiijuMC; Petal and Kaiiju upstreams, GPL-3.0-only). This is a separate
+implementation: no upstream async Path, shared evaluator, or live region
+is sent to workers. The detached search mirrors the bounded subset of
+Minecraft's PathFinder, BinaryHeap, and WalkNodeEvaluator used here.
+
+Path creation and explicit recomputation remain synchronous, including
+plugin-visible paths. Only the internal block-update recomputation hook
+can queue work. Delay navigation for at most two ticks; replace on the
+server thread only after revalidating the complete capture and intent.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index c439a675082fa180a71418b755bcf0e520d131ae..8361a3e78c26835c09bdaa2638a02a52dded9c9c 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -290,6 +290,7 @@
+     private final SuppressedExceptionCollector suppressedExceptions = new SuppressedExceptionCollector();
+     private final DiscontinuousFrame tickFrame;
+     private final PacketProcessor packetProcessor;
++    public final org.snowballmc.snowball.pathfinding.PathSearchExecutor leavesPathSearch = new org.snowballmc.snowball.pathfinding.PathSearchExecutor(); // Leaves - Bounded async pathfinding
+     // Paper - per-level scheduledEvents
+     private final ServerClockManager clockManager;
+ 
+@@ -1019,6 +1020,7 @@
+         org.spigotmc.WatchdogThread.doStop(); // Paper - Improved watchdog support
+         // CraftBukkit end
+         this.packetProcessor.close();
++        this.leavesPathSearch.close(); // Leaves - Bounded async pathfinding
+         if (this.metricsRecorder.isRecording()) {
+             this.cancelRecordingMetrics();
+         }
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+index c206fbd0a2927b9265e75cfab983fee62f190955..caaca390f77628b93bea4d40cc0bf9e751b86849 100644
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -1921,7 +1921,7 @@
+                 this.isUpdatingNavigations = true;
+ 
+                 for (PathNavigation navigation : navigationsToUpdate) {
+-                    navigation.recomputePath();
++                    navigation.recomputePathAfterBlockUpdate(); // Leaves - Bounded async pathfinding
+                 }
+             } finally {
+                 this.isUpdatingNavigations = false;
+diff --git a/net/minecraft/world/level/pathfinder/PathFinder.java b/net/minecraft/world/level/pathfinder/PathFinder.java
+index b903ae067130b460fca782fa8f37e9405670eeee..7c788d5a2a9ffd291630ef30e5f71f5e08b312af 100644
+--- a/net/minecraft/world/level/pathfinder/PathFinder.java
++++ b/net/minecraft/world/level/pathfinder/PathFinder.java
+@@ -40,6 +40,16 @@
+         this.maxVisitedNodes = maxVisitedNodes;
+     }
+ 
++    // Leaves start - Bounded async pathfinding
++    public int adjustedMaxVisitedNodes(final float multiplier) {
++        return (int)(this.maxVisitedNodes * multiplier);
++    }
++
++    public boolean capturesPathDebug() {
++        return this.captureDebug.getAsBoolean();
++    }
++    // Leaves end - Bounded async pathfinding
++
+     public @Nullable Path findPath(
+         final PathNavigationRegion level,
+         final Mob entity,
+@@ -82,7 +92,7 @@
+         Set<Node> closedSet = captureDebug ? new HashSet<>() : Set.of();
+         int count = 0;
+         List<Map.Entry<Target, BlockPos>> reachedTargets = Lists.newArrayListWithExpectedSize(targets.size()); // Paper - optimize collection
+-        int maxVisitedNodesAdjusted = (int)(this.maxVisitedNodes * maxVisitedNodesMultiplier);
++        int maxVisitedNodesAdjusted = this.adjustedMaxVisitedNodes(maxVisitedNodesMultiplier); // Leaves - Bounded async pathfinding
+ 
+         while (!this.openSet.isEmpty()) {
+             if (++count >= maxVisitedNodesAdjusted) {
+diff --git a/net/minecraft/world/entity/ai/navigation/PathNavigation.java b/net/minecraft/world/entity/ai/navigation/PathNavigation.java
+index 6c0d198fede5a480686381bb49efaaa0e40c6c34..e275e4116b9290bebfce8ecc5d50be2f98482da2 100644
+--- a/net/minecraft/world/entity/ai/navigation/PathNavigation.java
++++ b/net/minecraft/world/entity/ai/navigation/PathNavigation.java
+@@ -30,6 +30,9 @@
+ import net.minecraft.world.phys.Vec3;
+ import org.snowballmc.snowball.LeavesConfig; // Leaves - Path navigation timeout fix
+ import org.snowballmc.snowball.pathfix.PathTimeoutFix; // Leaves - Path navigation timeout fix
++import org.snowballmc.snowball.pathfinding.FlatPathSearch; // Leaves - Bounded async pathfinding
++import org.snowballmc.snowball.pathfinding.FlatPathSnapshot; // Leaves - Bounded async pathfinding
++import org.snowballmc.snowball.pathfinding.PathSearchExecutor; // Leaves - Bounded async pathfinding
+ import org.jspecify.annotations.Nullable;
+ 
+ public abstract class PathNavigation {
+@@ -57,6 +60,7 @@
+     public final PathFinder pathFinder;
+     private boolean isStuck;
+     private float requiredPathLength = 16.0F;
++    private @Nullable PendingPathSearch leavesPendingPathSearch; // Leaves - Bounded async pathfinding
+ 
+     public PathNavigation(final Mob mob, final Level level) {
+         this.mob = mob;
+@@ -100,7 +104,83 @@
+         this.speedModifier = speedModifier;
+     }
+ 
++    // Leaves start - Bounded async pathfinding
++    private record PendingPathSearch(FlatPathSnapshot snapshot, Path previous, int previousNodeIndex, int previousNodeCount,
++                                     long submittedAt, PathSearchExecutor.SearchTask task) {
++    }
++
++    public final void recomputePathAfterBlockUpdate() {
++        final var config = LeavesConfig.async.asyncPathfinding;
++        if (config.enabled && this.getClass() == GroundPathNavigation.class && this.level instanceof ServerLevel serverLevel
++            && FlatPathSnapshot.isOwnerThread(serverLevel) && this.mob.getNavigation() == this
++            && this.targetPos != null && this.path != null && !this.path.isDone()
++            && this.level.getGameTime() - this.timeLastRecompute > MAX_TIME_RECOMPUTE && !this.pathFinder.capturesPathDebug()) {
++            if (this.leavesPendingPathSearch != null) {
++                // The owner will revalidate the whole snapshot before resuming movement.
++                return;
++            }
++            final FlatPathSnapshot snapshot = FlatPathSnapshot.capture(serverLevel, this.mob, this.targetPos, this.reachRange,
++                this.getMaxPathLength(), this.pathFinder.adjustedMaxVisitedNodes(this.maxVisitedNodesMultiplier));
++            if (snapshot != null) {
++                final var task = serverLevel.getServer().leavesPathSearch.submit(snapshot.input(), config.resolvedMaxThreads(), config.keepalive,
++                    config.resolvedQueueSize(), config.resolvedRejectPolicy() == LeavesConfig.AsyncConfig.PathfindTaskRejectPolicy.FLUSH_ALL);
++                if (task != null) {
++                    this.leavesPendingPathSearch = new PendingPathSearch(snapshot, this.path, this.path.getNextNodeIndex(),
++                        this.path.getNodeCount(), this.level.getGameTime(), task);
++                    this.hasDelayedRecomputation = false;
++                    return;
++                }
++            }
++        }
++        this.recomputePath();
++    }
++
++    private void leavesCancelPathSearch() {
++        final PendingPathSearch pending = this.leavesPendingPathSearch;
++        if (pending != null) {
++            this.leavesPendingPathSearch = null;
++            ((ServerLevel)this.level).getServer().leavesPathSearch.cancel(pending.task());
++        }
++    }
++
++    private boolean leavesWaitForPathSearch() {
++        final PendingPathSearch pending = this.leavesPendingPathSearch;
++        if (pending == null) {
++            return false;
++        }
++        final ServerLevel serverLevel = (ServerLevel)this.level;
++        if (!FlatPathSnapshot.isOwnerThread(serverLevel)) {
++            return true;
++        }
++        if (this.mob.getNavigation() != this || this.mob.level() != this.level || !this.mob.valid || !this.mob.isAlive()
++            || this.mob.isNoAi() || serverLevel.getServer().hasStopped()
++            || this.path != pending.previous() || this.path.getNextNodeIndex() != pending.previousNodeIndex()
++            || this.path.getNodeCount() != pending.previousNodeCount()) {
++            this.leavesCancelPathSearch();
++            return false;
++        }
++        final long elapsed = serverLevel.getGameTime() - pending.submittedAt();
++        if (!pending.task().completed() && elapsed >= 0 && elapsed < 2) {
++            return true;
++        }
++        final FlatPathSearch.Result result = elapsed >= 0 && elapsed <= 2 ? pending.task().completedResult() : null;
++        this.leavesCancelPathSearch();
++        if (result != null && LeavesConfig.async.asyncPathfinding.enabled && this.targetPos != null && !this.pathFinder.capturesPathDebug()
++            && pending.snapshot().matches(serverLevel, this.mob, this.targetPos, this.reachRange, this.getMaxPathLength(),
++                this.pathFinder.adjustedMaxVisitedNodes(this.maxVisitedNodesMultiplier))) {
++            this.path = pending.snapshot().makePath(result);
++            this.resetStuckTimeout();
++            this.timeLastRecompute = serverLevel.getGameTime();
++            this.hasDelayedRecomputation = false;
++        } else {
++            this.recomputePath();
++        }
++        return false;
++    }
++    // Leaves end - Bounded async pathfinding
++
+     public void recomputePath() {
++        this.leavesCancelPathSearch(); // Leaves - Bounded async pathfinding
+         if (this.level.getGameTime() - this.timeLastRecompute <= 20L || !this.canUpdatePath()) {
+             this.hasDelayedRecomputation = true;
+         } else if (this.targetPos != null) {
+@@ -198,6 +278,7 @@
+         Path path = this.pathFinder.findPath(region, this.mob, targets, maxPathLength, reachRange, this.maxVisitedNodesMultiplier);
+         profiler.pop();
+         if (path != null && path.getTarget() != null) {
++            this.leavesCancelPathSearch(); // Leaves - Bounded async pathfinding
+             this.targetPos = path.getTarget();
+             this.reachRange = reachRange;
+             this.resetStuckTimeout();
+@@ -244,6 +325,7 @@
+     }
+ 
+     public boolean moveTo(final @Nullable Path newPath, final double speedModifier) {
++        this.leavesCancelPathSearch(); // Leaves - Bounded async pathfinding
+         if (newPath == null) {
+             this.path = null;
+             return false;
+@@ -275,6 +357,7 @@
+ 
+     public void tick() {
+         this.tick++;
++        if (this.leavesWaitForPathSearch()) { return; } // Leaves - Bounded async pathfinding
+         if (this.hasDelayedRecomputation) {
+             this.recomputePath();
+         }
+@@ -410,6 +493,7 @@
+     }
+ 
+     public void stop() {
++        this.leavesCancelPathSearch(); // Leaves - Bounded async pathfinding
+         this.path = null;
+     }
+ 

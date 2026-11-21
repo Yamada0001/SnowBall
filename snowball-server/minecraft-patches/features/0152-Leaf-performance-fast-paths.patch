@@ -1,0 +1,184 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leaves contributors <noreply@leavesmc.org>
+Date: Sat, 21 Nov 2026 18:00:00 +0800
+Subject: [PATCH] Leaf performance fast paths
+
+Port these opt-in fast paths from Leaf (https://github.com/Winds-Studio/Leaf):
+- 0300: Skip firing GenericGameEvent if no listeners, by HaHaWTH <102713261+HaHaWTH@users.noreply.github.com>
+- 0226: Skip BlockPhysicsEvent if no listeners, by Dreeam <61569423+Dreeam-qwq@users.noreply.github.com>
+- 0310: Optimize chunk packet construction, by hayanesuru <hayanesuru@outlook.jp>
+- 0293: Short-circuit InventoryChangeTrigger without listeners, by MrlingXD <90316914+wling-art@users.noreply.github.com>
+
+Check the live event handler lists instead of using a per-tick snapshot.
+Keep vanilla game-event delivery, Paper anti-xray and excess block-entity
+handling, and the existing Cerulean hooks intact.
+
+diff --git a/net/minecraft/advancements/triggers/InventoryChangeTrigger.java b/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
+index e9bfc239d47edc3708007b8d7da42297d49ad8d6..27c1adcb5e2a6067429974e39ea843386589fd55 100644
+--- a/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
++++ b/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
+@@ -39,6 +39,14 @@
+             return;
+         }
+         // Leaves end - Cerulean
++        // Leaves start - Leaf: Skip inventory scan without advancement listeners
++        if (org.snowballmc.snowball.LeavesConfig.performance.skipInventoryChangeWithoutListeners) {
++            final var listeners = player.getAdvancements().getTriggerMapForType(this);
++            if (listeners == null || listeners.isEmpty()) {
++                return;
++            }
++        }
++        // Leaves end - Leaf: Skip inventory scan without advancement listeners
+         int slotsFull = 0;
+         int slotsEmpty = 0;
+         int slotsOccupied = 0;
+diff --git a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+index 06f0088b4bdbd86c5942d523889386a81764a240..81da2debb71d3bccf8957c7d2734944b4040d552 100644
+--- a/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
++++ b/net/minecraft/network/protocol/game/ClientboundLevelChunkPacketData.java
+@@ -68,10 +68,22 @@
+     }
+     public ClientboundLevelChunkPacketData(final LevelChunk levelChunk, final io.papermc.paper.antixray.ChunkPacketInfo<net.minecraft.world.level.block.state.BlockState> chunkPacketInfo) {
+         // Paper end - Anti-Xray - Add chunk packet info
+-        this.heightmaps = levelChunk.getHeightmaps()
+-            .stream()
+-            .filter(entryx -> ((Heightmap.Types)entryx.getKey()).sendToClient())
+-            .collect(Collectors.toMap(Entry::getKey, entryx -> (long[])((Heightmap)entryx.getValue()).getRawData().clone()));
++        // Leaves start - Leaf: Optimize chunk packet construction
++        final boolean optimizeConstruction = org.snowballmc.snowball.LeavesConfig.performance.optimizeChunkPacketConstruction;
++        if (optimizeConstruction) {
++            this.heightmaps = new EnumMap<>(Heightmap.Types.class);
++            for (final Entry<Heightmap.Types, Heightmap> entry : levelChunk.getHeightmaps()) {
++                if (entry.getKey().sendToClient()) {
++                    this.heightmaps.put(entry.getKey(), entry.getValue().getRawData().clone());
++                }
++            }
++        } else {
++            this.heightmaps = levelChunk.getHeightmaps()
++                .stream()
++                .filter(entryx -> ((Heightmap.Types)entryx.getKey()).sendToClient())
++                .collect(Collectors.toMap(Entry::getKey, entryx -> (long[])((Heightmap)entryx.getValue()).getRawData().clone()));
++        }
++        // Leaves end - Leaf: Optimize chunk packet construction
+         this.buffer = new byte[calculateChunkSize(levelChunk)];
+         // Paper start - Anti-Xray - Add chunk packet info
+         if (chunkPacketInfo != null) {
+@@ -81,18 +93,35 @@
+         this.blockEntitiesData = Lists.newArrayList();
+         int totalTileEntities = 0; // Paper - Handle oversized block entities in chunks
+ 
+-        for (Entry<BlockPos, BlockEntity> entry : levelChunk.getBlockEntities().entrySet()) {
+-            // Paper start - Handle oversized block entities in chunks
+-            if (++totalTileEntities > BLOCK_ENTITY_LIMIT) {
+-                net.minecraft.network.protocol.Packet<ClientGamePacketListener> packet = entry.getValue().getUpdatePacket();
+-                if (packet != null) {
+-                    this.extraPackets.add(packet);
+-                    continue;
++        // Leaves start - Leaf: Optimize chunk packet construction
++        if (optimizeConstruction) {
++            for (final BlockEntity blockEntity : levelChunk.getBlockEntities().values()) {
++                // Paper start - Handle oversized block entities in chunks
++                if (++totalTileEntities > BLOCK_ENTITY_LIMIT) {
++                    net.minecraft.network.protocol.Packet<ClientGamePacketListener> packet = blockEntity.getUpdatePacket();
++                    if (packet != null) {
++                        this.extraPackets.add(packet);
++                        continue;
++                    }
+                 }
++                // Paper end - Handle oversized block entities in chunks
++                this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(blockEntity));
+             }
+-            // Paper end - Handle oversized block entities in chunks
+-            this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(entry.getValue()));
+-        }
++        } else {
++            for (Entry<BlockPos, BlockEntity> entry : levelChunk.getBlockEntities().entrySet()) {
++                // Paper start - Handle oversized block entities in chunks
++                if (++totalTileEntities > BLOCK_ENTITY_LIMIT) {
++                    net.minecraft.network.protocol.Packet<ClientGamePacketListener> packet = entry.getValue().getUpdatePacket();
++                    if (packet != null) {
++                        this.extraPackets.add(packet);
++                        continue;
++                    }
++                }
++                // Paper end - Handle oversized block entities in chunks
++                this.blockEntitiesData.add(ClientboundLevelChunkPacketData.BlockEntityInfo.create(entry.getValue()));
++            }
++        }
++        // Leaves end - Leaf: Optimize chunk packet construction
+     }
+ 
+     private ClientboundLevelChunkPacketData(
+diff --git a/net/minecraft/world/level/gameevent/GameEventDispatcher.java b/net/minecraft/world/level/gameevent/GameEventDispatcher.java
+index f8c4b24e603abb85c804cccec2c34c47f2670aba..fd4f704a4950e7c8eb4faeb40176687ba60a2d8a 100644
+--- a/net/minecraft/world/level/gameevent/GameEventDispatcher.java
++++ b/net/minecraft/world/level/gameevent/GameEventDispatcher.java
+@@ -22,15 +22,20 @@
+     public void post(final Holder<GameEvent> gameEvent, final Vec3 position, final GameEvent.Context context) {
+         int radius = gameEvent.value().notificationRadius();
+         BlockPos center = BlockPos.containing(position);
+-        // CraftBukkit start
+-        org.bukkit.event.world.GenericGameEvent apiEvent = new org.bukkit.event.world.GenericGameEvent(
+-            org.bukkit.craftbukkit.CraftGameEvent.minecraftHolderToBukkit(gameEvent), org.bukkit.craftbukkit.util.CraftLocation.toBukkit(center, this.level),
+-            (context.sourceEntity() == null) ? null : context.sourceEntity().getBukkitEntity(), radius, !org.bukkit.Bukkit.isPrimaryThread());
+-        if (!apiEvent.callEvent()) {
+-            return;
++        // Leaves start - Leaf: Skip GenericGameEvent without listeners
++        if (!org.snowballmc.snowball.LeavesConfig.performance.skipGenericGameEventWithoutListeners
++            || org.bukkit.event.world.GenericGameEvent.getHandlerList().getRegisteredListeners().length != 0) {
++            // CraftBukkit start
++            org.bukkit.event.world.GenericGameEvent apiEvent = new org.bukkit.event.world.GenericGameEvent(
++                org.bukkit.craftbukkit.CraftGameEvent.minecraftHolderToBukkit(gameEvent), org.bukkit.craftbukkit.util.CraftLocation.toBukkit(center, this.level),
++                (context.sourceEntity() == null) ? null : context.sourceEntity().getBukkitEntity(), radius, !org.bukkit.Bukkit.isPrimaryThread());
++            if (!apiEvent.callEvent()) {
++                return;
++            }
++            radius = apiEvent.getRadius();
++            // CraftBukkit end
+         }
+-        radius = apiEvent.getRadius();
+-        // CraftBukkit end
++        // Leaves end - Leaf: Skip GenericGameEvent without listeners
+         int sectionMinX = SectionPos.blockToSectionCoord(center.getX() - radius);
+         int sectionMinY = SectionPos.blockToSectionCoord(center.getY() - radius);
+         int sectionMinZ = SectionPos.blockToSectionCoord(center.getZ() - radius);
+diff --git a/net/minecraft/world/level/redstone/NeighborUpdater.java b/net/minecraft/world/level/redstone/NeighborUpdater.java
+index 29c067ef132bb0084060b344ba908aef821a95b3..853c9480e65f29ac324fd6ab395edc443444716b 100644
+--- a/net/minecraft/world/level/redstone/NeighborUpdater.java
++++ b/net/minecraft/world/level/redstone/NeighborUpdater.java
+@@ -7,6 +7,7 @@
+ import net.minecraft.core.BlockPos;
+ import net.minecraft.core.Direction;
+ import net.minecraft.core.registries.BuiltInRegistries;
++import net.minecraft.server.level.ServerLevel; // Leaves - Leaf: Skip BlockPhysicsEvent without listeners
+ import net.minecraft.world.level.Level;
+ import net.minecraft.world.level.LevelAccessor;
+ import net.minecraft.world.level.block.Block;
+@@ -87,14 +88,21 @@
+         // Paper end - Add source block to BlockPhysicsEvent
+         if (org.snowballmc.snowball.command.leaves.subcommands.BlockUpdateCommand.isNoBlockUpdate()) return; // Leaves - no block update
+         try {
+-            // CraftBukkit start
+-            org.bukkit.event.block.BlockPhysicsEvent event = new org.bukkit.event.block.BlockPhysicsEvent(org.bukkit.craftbukkit.block.CraftBlock.at(level, pos), state.asBlockData(), org.bukkit.craftbukkit.block.CraftBlock.at(level, sourcePos)); // Paper - Add source block to BlockPhysicsEvent
+-            level.getCraftServer().getPluginManager().callEvent(event);
++            // Leaves start - Leaf: Skip BlockPhysicsEvent without listeners
++            // Paper's per-tick flag can miss listeners registered earlier in this tick.
++            if (!org.snowballmc.snowball.LeavesConfig.performance.skipBlockPhysicsEventWithoutListeners
++                || !(level instanceof ServerLevel)
++                || org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length != 0) {
++                // CraftBukkit start
++                org.bukkit.event.block.BlockPhysicsEvent event = new org.bukkit.event.block.BlockPhysicsEvent(org.bukkit.craftbukkit.block.CraftBlock.at(level, pos), state.asBlockData(), org.bukkit.craftbukkit.block.CraftBlock.at(level, sourcePos)); // Paper - Add source block to BlockPhysicsEvent
++                level.getCraftServer().getPluginManager().callEvent(event);
+ 
+-            if (event.isCancelled()) {
+-                return;
++                if (event.isCancelled()) {
++                    return;
++                }
++                // CraftBukkit end
+             }
+-            // CraftBukkit end
++            // Leaves end - Leaf: Skip BlockPhysicsEvent without listeners
+             state.handleNeighborChanged(level, pos, changedBlock, orientation, movedByPiston);
+             // Spigot start
+         } catch (StackOverflowError ex) {

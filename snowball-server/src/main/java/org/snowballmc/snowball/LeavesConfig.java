@@ -1047,10 +1047,128 @@ public final class LeavesConfig {
         public boolean largeEnderChest = false;
     }
 
+    public static final AsyncConfig async = new AsyncConfig();
+
+    @GlobalConfigCategory("async")
+    public static class AsyncConfig {
+        public final AsyncMobSpawningConfig asyncMobSpawning = new AsyncMobSpawningConfig();
+        public final AsyncPathfindingConfig asyncPathfinding = new AsyncPathfindingConfig();
+
+        public enum PathfindTaskRejectPolicy {
+            AUTO, FLUSH_ALL, CALLER_RUNS
+        }
+
+        @GlobalConfigCategory("async-mob-spawning")
+        public static class AsyncMobSpawningConfig {
+            @GlobalConfig(value = "enabled", snowball = true, lock = true, comment = {
+                "实验性：将支持的自然刷怪计数移到后台；实体生成和插件事件仍在主线程。",
+                "要求对应世界的 Paper per-player-mob-spawns 已开启；不支持的场景回退同步。默认关闭，需重启。"
+            })
+            public boolean enabled = false;
+        }
+
+        @GlobalConfigCategory("async-pathfinding")
+        public static class AsyncPathfindingConfig {
+            @GlobalConfig(value = "enabled", snowball = true, lock = true, comment = {
+                "实验性：对支持的地面寻路请求使用隔离的后台搜索。",
+                "未覆盖的实体、地形或已失效请求沿用同步寻路。默认关闭，需重启。"
+            })
+            public boolean enabled = false;
+
+            @GlobalConfig(value = "max-threads", snowball = true, lock = true, validator = AsyncPathThreadsValidator.class, comment = {
+                "最大工作线程数（0–256）；0 按可用 CPU 核数除以 4 取整，至少 1。需重启。"
+            })
+            public int maxThreads = 0;
+
+            @GlobalConfig(value = "keepalive", snowball = true, lock = true, validator = AsyncPathKeepaliveValidator.class, comment = {
+                "额外工作线程空闲后回收的时间（秒，0–86400）。默认 60，需重启。"
+            })
+            public int keepalive = 60;
+
+            @GlobalConfig(value = "queue-size", snowball = true, lock = true, validator = AsyncPathQueueValidator.class, comment = {
+                "最多等待的寻路任务数（0–65536）；0 自动按最大线程数乘 256。需重启。"
+            })
+            public int queueSize = 0;
+
+            @GlobalConfig(value = "reject-policy", snowball = true, lock = true, comment = {
+                "队列满时的处理策略：CALLER_RUNS 只在主线程运行新任务；FLUSH_ALL 取出队列中的任务并在主线程处理。",
+                "AUTO：至少 12 个可用处理器且队列容量小于 512 时用 FLUSH_ALL，否则用 CALLER_RUNS。需重启。"
+            })
+            public PathfindTaskRejectPolicy rejectPolicy = PathfindTaskRejectPolicy.AUTO;
+
+            public int resolvedMaxThreads() {
+                return maxThreads == 0 ? Math.min(256, Math.max(1, Runtime.getRuntime().availableProcessors() / 4)) : maxThreads;
+            }
+
+            public int resolvedQueueSize() {
+                return queueSize == 0 ? resolvedMaxThreads() * 256 : queueSize;
+            }
+
+            public PathfindTaskRejectPolicy resolvedRejectPolicy() {
+                if (rejectPolicy != PathfindTaskRejectPolicy.AUTO) {
+                    return rejectPolicy;
+                }
+                return Runtime.getRuntime().availableProcessors() >= 12 && resolvedQueueSize() < 512
+                    ? PathfindTaskRejectPolicy.FLUSH_ALL : PathfindTaskRejectPolicy.CALLER_RUNS;
+            }
+        }
+
+        private static class AsyncPathThreadsValidator extends IntConfigValidator {
+            @Override
+            public void verify(Integer old, Integer value) {
+                verifyAsyncRange("max-threads", value, 256);
+            }
+        }
+
+        private static class AsyncPathKeepaliveValidator extends IntConfigValidator {
+            @Override
+            public void verify(Integer old, Integer value) {
+                verifyAsyncRange("keepalive", value, 86400);
+            }
+        }
+
+        private static class AsyncPathQueueValidator extends IntConfigValidator {
+            @Override
+            public void verify(Integer old, Integer value) {
+                verifyAsyncRange("queue-size", value, 65536);
+            }
+        }
+
+        private static void verifyAsyncRange(String name, int value, int max) {
+            if (value < 0 || value > max) {
+                throw new IllegalArgumentException("async-pathfinding." + name + " must be between 0 and " + max);
+            }
+        }
+    }
+
     public static PerformanceConfig performance = new PerformanceConfig();
 
     @GlobalConfigCategory("performance")
     public static class PerformanceConfig {
+        @GlobalConfig(value = "skip-generic-game-event-without-listeners", snowball = true, comment = {
+            "没有 Bukkit GenericGameEvent 监听器时跳过事件对象构造。原版振动、游戏事件传播不变，可热重载。"
+        })
+        public boolean skipGenericGameEventWithoutListeners = true;
+
+        @GlobalConfig(value = "skip-block-physics-event-without-listeners", snowball = true, comment = {
+            "仅在没有 BlockPhysicsEvent 监听器时跳过邻居更新入口的事件对象构造。方块更新照常运行，可热重载。"
+        })
+        public boolean skipBlockPhysicsEventWithoutListeners = true;
+
+        @GlobalConfig(value = "optimize-chunk-packet-construction", snowball = true, comment = {
+            "减少区块包构造时的临时对象和遍历成本。保留高度图拷贝、反矿透与方块实体补包，可热重载。"
+        })
+        public boolean optimizeChunkPacketConstruction = true;
+
+        @GlobalConfig(value = "skip-inventory-change-without-listeners", snowball = true, comment = {
+            "玩家没有待处理的背包变更进度监听时，跳过槽位扫描。不改变 Cerulean 的行为或已有进度判定，可热重载。"
+        })
+        public boolean skipInventoryChangeWithoutListeners = true;
+
+        @GlobalConfig(value = "optimize-mob-spawning", snowball = true, comment = {
+            "实验性：使用同步自然刷怪查询的低开销路径。与 async-mob-spawning 独立，默认关闭，可热重载。"
+        })
+        public boolean optimizeMobSpawning = false;
 
         public PerformanceRemoveConfig remove = new PerformanceRemoveConfig();
 
@@ -1969,6 +2087,17 @@ public final class LeavesConfig {
 
     @GlobalConfigCategory("fix")
     public static class FixConfig {
+        @GlobalConfig(value = "fix-skeleton-horse-trap-goal", snowball = true, lock = true, comment = {
+            "修复骷髅马陷阱在目标迭代中移除自身的问题，并清理缓存的玩家列表。需重启。"
+        })
+        public boolean fixSkeletonHorseTrapGoal = true;
+
+        @GlobalConfig(value = "propagate-block-destruction-cancellation", snowball = true, comment = {
+            "末地入口、出生平台和出口门生成时，尊重插件取消的方块破坏；已为空气的位置仍可正常放块。",
+            "保留 Bukkit 放置事件与方块快照回滚行为，可热重载。"
+        })
+        public boolean propagateBlockDestructionCancellation = false;
+
         @GlobalConfig(value = "vanilla-hopper", comment = {
             "开启后会使用较为激进的方案将漏斗的运行逻辑还原为原版行为。 WARNING 开启后可能会轻微降低性能。"
         })

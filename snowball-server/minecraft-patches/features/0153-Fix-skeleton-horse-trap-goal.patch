@@ -1,0 +1,198 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: hayanesuru <hayanesuru@outlook.jp>
+Date: Fri, 23 Jan 2026 18:47:34 +0900
+Subject: [PATCH] Fix skeleton horse trap goal removal during iteration
+
+Adapted from Leaf's fix skeleton horse trap NPE by hayanesuru
+<hayanesuru@outlook.jp>, licensed under MIT (see licenses/MIT.md).
+Defer registration changes instead of retaining an inactive goal, and keep
+Paper's eligible-player list and cancellable trap event. The option is
+startup-only in the server configuration.
+
+diff --git a/net/minecraft/world/entity/ai/goal/GoalSelector.java b/net/minecraft/world/entity/ai/goal/GoalSelector.java
+index 0439543fbb25ddb974550fe9dbdaa479e330937d..b8b84562cf261045c827b5fe4fa4be06639e7d18 100644
+--- a/net/minecraft/world/entity/ai/goal/GoalSelector.java
++++ b/net/minecraft/world/entity/ai/goal/GoalSelector.java
+@@ -26,12 +26,55 @@
+     private static final Goal.Flag[] GOAL_FLAG_VALUES = Goal.Flag.values(); // Paper - remove streams from GoalSelector
+     private final ca.spottedleaf.moonrise.common.set.OptimizedSmallEnumSet<net.minecraft.world.entity.ai.goal.Goal.Flag> goalTypes = new ca.spottedleaf.moonrise.common.set.OptimizedSmallEnumSet<>(Goal.Flag.class); // Paper - remove streams from GoalSelector
+     private int curRate; // Paper - EAR 2
++    // Leaves start - fix skeleton horse trap goal
++    private boolean deferGoalChangesDuringIteration;
++    private int goalIterationDepth;
++    private java.util.ArrayDeque<Runnable> deferredGoalChanges;
++
++    public void enableGoalChangeDeferral() {
++        this.deferGoalChangesDuringIteration = true;
++    }
++
++    public void runAfterGoalIteration(final Runnable change) {
++        if (this.goalIterationDepth == 0) {
++            change.run();
++        } else {
++            if (this.deferredGoalChanges == null) {
++                this.deferredGoalChanges = new java.util.ArrayDeque<>();
++            }
++            this.deferredGoalChanges.addLast(change);
++        }
++    }
++
++    private void finishGoalIteration() {
++        if (--this.goalIterationDepth == 0 && this.deferredGoalChanges != null) {
++            final java.util.ArrayDeque<Runnable> changes = this.deferredGoalChanges;
++            this.deferredGoalChanges = null;
++            changes.forEach(Runnable::run);
++        }
++    }
++    // Leaves end - fix skeleton horse trap goal
+ 
+     public void addGoal(final int prio, final Goal goal) {
+         this.availableGoals.add(new WrappedGoal(prio, goal));
+     }
+ 
+     public void removeAllGoals(final Predicate<Goal> predicate) {
++        // Leaves start - fix skeleton horse trap goal
++        if (!this.deferGoalChangesDuringIteration) {
++            this.removeAllGoalsInternal(predicate);
++            return;
++        }
++        ++this.goalIterationDepth;
++        try {
++            this.removeAllGoalsInternal(predicate);
++        } finally {
++            this.finishGoalIteration();
++        }
++    }
++
++    private void removeAllGoalsInternal(final Predicate<Goal> predicate) {
++        // Leaves end - fix skeleton horse trap goal
+         for (WrappedGoal availableGoal : this.availableGoals) {
+             if (predicate.test(availableGoal.getGoal()) && availableGoal.isRunning()) {
+                 availableGoal.stop();
+@@ -82,6 +125,21 @@
+     }
+ 
+     public void tick() {
++        // Leaves start - fix skeleton horse trap goal
++        if (!this.deferGoalChangesDuringIteration) {
++            this.tickInternal();
++            return;
++        }
++        ++this.goalIterationDepth;
++        try {
++            this.tickInternal();
++        } finally {
++            this.finishGoalIteration();
++        }
++    }
++
++    private void tickInternal() {
++        // Leaves end - fix skeleton horse trap goal
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("goalCleanup");
+ 
+@@ -118,6 +176,21 @@
+     }
+ 
+     public void tickRunningGoals(final boolean forceTickAllRunningGoals) {
++        // Leaves start - fix skeleton horse trap goal
++        if (!this.deferGoalChangesDuringIteration) {
++            this.tickRunningGoalsInternal(forceTickAllRunningGoals);
++            return;
++        }
++        ++this.goalIterationDepth;
++        try {
++            this.tickRunningGoalsInternal(forceTickAllRunningGoals);
++        } finally {
++            this.finishGoalIteration();
++        }
++    }
++
++    private void tickRunningGoalsInternal(final boolean forceTickAllRunningGoals) {
++        // Leaves end - fix skeleton horse trap goal
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("goalTick");
+ 
+diff --git a/net/minecraft/world/entity/animal/equine/SkeletonHorse.java b/net/minecraft/world/entity/animal/equine/SkeletonHorse.java
+index 71da9124581c7f5a7a9cdd35f9629397fba75668..2be30310746360be2678a6df828a31dafeb0860d 100644
+--- a/net/minecraft/world/entity/animal/equine/SkeletonHorse.java
++++ b/net/minecraft/world/entity/animal/equine/SkeletonHorse.java
+@@ -42,6 +42,9 @@
+ 
+     public SkeletonHorse(final EntityType<? extends SkeletonHorse> type, final Level level) {
+         super(type, level);
++        if (org.snowballmc.snowball.LeavesConfig.fix.fixSkeletonHorseTrapGoal) {
++            this.goalSelector.enableGoalChangeDeferral(); // Leaves - fix skeleton horse trap goal
++        }
+     }
+ 
+     public static AttributeSupplier.Builder createAttributes() {
+@@ -157,11 +160,21 @@
+     public void setTrap(final boolean trap) {
+         if (trap != this.isTrap) {
+             this.isTrap = trap;
+-            if (trap) {
+-                this.goalSelector.addGoal(1, this.skeletonTrapGoal);
+-            } else {
+-                this.goalSelector.removeGoal(this.skeletonTrapGoal);
+-            }
++            // Leaves start - fix skeleton horse trap goal
++            if (org.snowballmc.snowball.LeavesConfig.fix.fixSkeletonHorseTrapGoal) {
++                this.goalSelector.runAfterGoalIteration(() -> this.updateTrapGoalRegistration(trap));
++                return;
++            }
++            this.updateTrapGoalRegistration(trap);
++        }
++    }
++
++    private void updateTrapGoalRegistration(final boolean trap) {
++        // Leaves end - fix skeleton horse trap goal
++        if (trap) {
++            this.goalSelector.addGoal(1, this.skeletonTrapGoal);
++        } else {
++            this.goalSelector.removeGoal(this.skeletonTrapGoal);
+         }
+     }
+ 
+diff --git a/net/minecraft/world/entity/animal/equine/SkeletonTrapGoal.java b/net/minecraft/world/entity/animal/equine/SkeletonTrapGoal.java
+index 9f9e7b6b40f0cf12fd5fca848dc223553857b9a0..229c9b4ff4cc0b9926f5f5f8f4e76b48ddb2839d 100644
+--- a/net/minecraft/world/entity/animal/equine/SkeletonTrapGoal.java
++++ b/net/minecraft/world/entity/animal/equine/SkeletonTrapGoal.java
+@@ -27,13 +27,20 @@
+ 
+     @Override
+     public boolean canUse() {
++        if (org.snowballmc.snowball.LeavesConfig.fix.fixSkeletonHorseTrapGoal && !this.horse.isTrap()) return false; // Leaves - fix skeleton horse trap goal
+         return !(this.eligiblePlayers = this.horse.level().findNearbyBukkitPlayers(this.horse.getX(), this.horse.getY(), this.horse.getZ(), 10.0, net.minecraft.world.entity.EntitySelector.PLAYER_AFFECTS_SPAWNING)).isEmpty(); // Paper - Affects Spawning API & SkeletonHorseTrapEvent
+     }
+ 
+     @Override
+     public void tick() {
++        // Leaves start - fix skeleton horse trap goal
++        final boolean fixTrapGoal = org.snowballmc.snowball.LeavesConfig.fix.fixSkeletonHorseTrapGoal;
++        final java.util.List<org.bukkit.entity.HumanEntity> eligiblePlayers = this.eligiblePlayers;
++        if (fixTrapGoal && (!this.horse.isTrap() || eligiblePlayers == null)) return;
++        // Leaves end - fix skeleton horse trap goal
+         ServerLevel level = (ServerLevel)this.horse.level();
+-        if (!new com.destroystokyo.paper.event.entity.SkeletonHorseTrapEvent((org.bukkit.entity.SkeletonHorse) this.horse.getBukkitEntity(), this.eligiblePlayers).callEvent()) return; // Paper
++        if (!new com.destroystokyo.paper.event.entity.SkeletonHorseTrapEvent((org.bukkit.entity.SkeletonHorse) this.horse.getBukkitEntity(), eligiblePlayers).callEvent()) return; // Paper
++        if (fixTrapGoal && !this.horse.isTrap()) return; // Leaves - a plugin disarmed the trap during the event
+         DifficultyInstance difficulty = level.getCurrentDifficultyAt(this.horse.blockPosition());
+         this.horse.setTrap(false);
+         this.horse.setTamed(true);
+@@ -62,6 +69,15 @@
+             }
+         }
+     }
++
++    // Leaves start - fix skeleton horse trap goal
++    @Override
++    public void stop() {
++        if (org.snowballmc.snowball.LeavesConfig.fix.fixSkeletonHorseTrapGoal) {
++            this.eligiblePlayers = null;
++        }
++    }
++    // Leaves end - fix skeleton horse trap goal
+ 
+     private @Nullable AbstractHorse createHorse(final DifficultyInstance difficulty) {
+         SkeletonHorse horse = EntityTypes.SKELETON_HORSE.create(this.horse.level(), EntitySpawnReason.TRIGGERED);
