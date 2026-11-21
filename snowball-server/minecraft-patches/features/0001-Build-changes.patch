@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: violetc <58360096+s-yh-china@users.noreply.github.com>
+Date: Sun, 26 Jan 2025 13:58:49 +0800
+Subject: [PATCH] Build changes
+
+
+diff --git a/ca/spottedleaf/moonrise/paper/PaperHooks.java b/ca/spottedleaf/moonrise/paper/PaperHooks.java
+index 92238518c25dd765b356ff628fd373997464ea82..ab062a0a799f38a1d5d6d880df9baa0520a7d492 100644
+--- a/ca/spottedleaf/moonrise/paper/PaperHooks.java
++++ b/ca/spottedleaf/moonrise/paper/PaperHooks.java
+@@ -29,7 +29,7 @@ import net.minecraft.world.phys.AABB;
+ import java.util.List;
+ import java.util.function.Predicate;
+ 
+-public final class PaperHooks extends BaseChunkSystemHooks implements PlatformHooks {
++public class PaperHooks extends BaseChunkSystemHooks implements PlatformHooks { // Leaves - not final
+ 
+     private static final org.slf4j.Logger LOGGER = com.mojang.logging.LogUtils.getLogger();
+ 
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index c3bf41af0273e902f881cc070fcef6dd64abb063..211e78b603ab3c572abfa7f8a5785606550b4b0e 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1274,7 +1274,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+                 LOGGER.info("*************************************************************************************");
+                 LOGGER.info("This is the first time you're starting this server.");
+                 LOGGER.info("It's recommended you read our 'Getting Started' documentation for guidance.");
+-                LOGGER.info("View this and more helpful information here: https://docs.papermc.io/paper/next-steps");
++                LOGGER.info("View this and more helpful information here: https://docs.leavesmc.org/leaves/guides/next-steps"); // Leaves - change
+                 LOGGER.info("*************************************************************************************");
+             }
+             // Paper end - Add onboarding message for initial server start
+@@ -1930,7 +1930,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+     }
+ 
+     public String getServerModName() {
+-        return io.papermc.paper.ServerBuildInfo.buildInfo().brandName(); // Paper
++        return org.snowballmc.snowball.LeavesConfig.mics.serverModName; // Leaves - Custom // Paper
+     }
+ 
+     public ServerClockManager clockManager() {
+diff --git a/net/minecraft/server/gui/MinecraftServerGui.java b/net/minecraft/server/gui/MinecraftServerGui.java
+index 023cca49c6dd0f2961cf30f02c7cd74601f73f8b..57b74c6864d32de0348ef143901c4c92d3fbcfb0 100644
+--- a/net/minecraft/server/gui/MinecraftServerGui.java
++++ b/net/minecraft/server/gui/MinecraftServerGui.java
+@@ -185,7 +185,7 @@ public class MinecraftServerGui extends JComponent {
+ 
+     // Paper start - Add onboarding message for initial server start
+     private JComponent buildOnboardingPanel() {
+-        String onboardingLink = "https://docs.papermc.io/paper/next-steps";
++        String onboardingLink = "https://docs.leavesmc.org/leaves/guides/next-steps"; // Leaves - change
+         JPanel jPanel = new JPanel();
+ 
+         javax.swing.JLabel jLabel = new javax.swing.JLabel("If you need help setting up your server you can visit:");

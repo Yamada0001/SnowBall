@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 11:20:00 +0800
+Subject: [PATCH] Optimize powered rail updates
+
+Replaces the recursive power propagation of powered/activator rails with a
+network-based search that visits each rail at most once per update and caches
+the result per block-change epoch.
+
+This patch is Powered by RailOptimization(https://github.com/EasterGhost/RailOptimization)
+
+This patch is based on the following mixins:
+* "RailOptimization/mixin/PoweredRailBlockMixin.java"
+* "RailOptimization/mixin/BaseRailBlockMixin.java"
+* "RailOptimization/mixin/LevelChunkMixin.java"
+* "RailOptimization/mixin/LevelMixin.java"
+* "RailOptimization/mixin/BlockStateMixin.java"
+By: EasterGhost
+As part of: RailOptimization (https://github.com/EasterGhost/RailOptimization)
+Licensed under: GPL-3.0 (https://www.gnu.org/licenses/gpl-3.0.html)
+
+Two behaviours are deliberately preserved from Paper's own version of
+updateState: the BlockRedstoneEvent is still fired by the fallback path, and
+the bridge performs the same binary redstone change notification itself when
+it takes the fast path.
+
+diff --git a/net/minecraft/world/level/Level.java b/net/minecraft/world/level/Level.java
+index ed1d87b5970b2912cc17bdc9644f5c2f6e4b4cea..bcab8e9799304a0a87c5c4310f6b236e61233bca 100644
+--- a/net/minecraft/world/level/Level.java
++++ b/net/minecraft/world/level/Level.java
+@@ -101,7 +101,17 @@ import org.bukkit.craftbukkit.block.data.CraftBlockData;
+ import org.bukkit.entity.SpawnCategory;
+ // CraftBukkit end
+ 
+-public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel, ca.spottedleaf.moonrise.patches.chunk_system.world.ChunkSystemEntityGetter { // Paper - rewrite chunk system // Paper - optimise collisions
++public abstract class Level implements LevelAccessor, AutoCloseable, ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemLevel, ca.spottedleaf.moonrise.patches.chunk_system.world.ChunkSystemEntityGetter, org.snowballmc.snowball.railoptimization.api.LevelEpochAccess { // Paper - rewrite chunk system // Paper - optimise collisions
++
++    // Leaves start - rail optimization
++    private final java.util.concurrent.atomic.AtomicLong leaves$blockChangeEpoch = new java.util.concurrent.atomic.AtomicLong();
++
++    @Override
++    public java.util.concurrent.atomic.AtomicLong railoptimization$getBlockChangeEpoch() {
++        return this.leaves$blockChangeEpoch;
++    }
++    // Leaves end - rail optimization
++
+     public static final Codec<ResourceKey<Level>> RESOURCE_KEY_CODEC = ResourceKey.codec(Registries.DIMENSION);
+     public static final ResourceKey<Level> OVERWORLD = ResourceKey.create(Registries.DIMENSION, Identifier.withDefaultNamespace("overworld"));
+     public static final ResourceKey<Level> NETHER = ResourceKey.create(Registries.DIMENSION, Identifier.withDefaultNamespace("the_nether"));
+diff --git a/net/minecraft/world/level/block/BaseRailBlock.java b/net/minecraft/world/level/block/BaseRailBlock.java
+index 3b961c7b13e112e6378592b89bb4fbde376a13e9..964988763e8cbd27920a6e5f3230040c69d252ab 100644
+--- a/net/minecraft/world/level/block/BaseRailBlock.java
++++ b/net/minecraft/world/level/block/BaseRailBlock.java
+@@ -79,7 +79,7 @@ public abstract class BaseRailBlock extends Block implements SimpleWaterloggedBl
+     ) {
+         if (!level.isClientSide() && level.getBlockState(pos).is(this)) {
+             RailShape shape = state.getValue(this.getShapeProperty());
+-            if (shouldBeRemoved(pos, level, shape)) {
++            if (leaves$shouldBeRemoved(pos, level, shape)) { // Leaves - rail optimization
+                 dropResources(state, level, pos);
+                 level.removeBlock(pos, movedByPiston);
+             } else {
+@@ -88,6 +88,16 @@ public abstract class BaseRailBlock extends Block implements SimpleWaterloggedBl
+         }
+     }
+ 
++    // Leaves start - rail optimization
++    private boolean leaves$shouldBeRemoved(final BlockPos pos, final Level level, final RailShape shape) {
++        if (org.snowballmc.snowball.railoptimization.bridge.RailLogic.isOptimizationEnabled()
++            && (this == Blocks.POWERED_RAIL || this == Blocks.ACTIVATOR_RAIL)) {
++            return org.snowballmc.snowball.railoptimization.bridge.RailSupportCache.shouldBeRemoved(pos, level, shape);
++        }
++        return shouldBeRemoved(pos, level, shape);
++    }
++    // Leaves end - rail optimization
++
+     private static boolean shouldBeRemoved(final BlockPos pos, final Level level, final RailShape shape) {
+         if (!canSupportRigidBlock(level, pos.below())) {
+             return true;
+diff --git a/net/minecraft/world/level/block/PoweredRailBlock.java b/net/minecraft/world/level/block/PoweredRailBlock.java
+index e6b32bfb66a7dad18d9d42abf833937796287780..b28d3023591c0deec06f1d7cd982613f1fa8881d 100644
+--- a/net/minecraft/world/level/block/PoweredRailBlock.java
++++ b/net/minecraft/world/level/block/PoweredRailBlock.java
+@@ -109,6 +109,11 @@ public class PoweredRailBlock extends BaseRailBlock {
+ 
+     @Override
+     protected void updateState(final BlockState state, final Level level, final BlockPos pos, final Block block) {
++        // Leaves start - rail optimization
++        if (org.snowballmc.snowball.railoptimization.bridge.RailLogic.tryCustomUpdateState(this, state, level, pos, block)) {
++            return;
++        }
++        // Leaves end - rail optimization
+         boolean isPowered = state.getValue(POWERED);
+         boolean shouldPower = level.hasNeighborSignal(pos)
+             || this.findPoweredRailSignal(level, pos, state, true, 0)
+diff --git a/net/minecraft/world/level/block/state/BlockState.java b/net/minecraft/world/level/block/state/BlockState.java
+index 921081dc4f8374bd6eb3a1e6d29fa50f6c420efd..04a97f7503455f571111eb4af5843daf01a771b1 100644
+--- a/net/minecraft/world/level/block/state/BlockState.java
++++ b/net/minecraft/world/level/block/state/BlockState.java
+@@ -6,7 +6,26 @@ import net.minecraft.core.registries.BuiltInRegistries;
+ import net.minecraft.world.level.block.Block;
+ import net.minecraft.world.level.block.state.properties.Property;
+ 
+-public class BlockState extends BlockBehaviour.BlockStateBase {
++public class BlockState extends BlockBehaviour.BlockStateBase implements org.snowballmc.snowball.railoptimization.api.RailStateAccess {
++
++    // Leaves start - rail optimization
++    private byte leaves$railData;
++
++    @Override
++    public int railoptimization$getRailData() {
++        int data = this.leaves$railData;
++        if (data == 0) {
++            net.minecraft.world.level.block.state.properties.RailShape shape = this.getValue(net.minecraft.world.level.block.PoweredRailBlock.SHAPE);
++            data = org.snowballmc.snowball.railoptimization.api.RailStateAccess.INITIALIZED_MASK | shape.ordinal();
++            if (this.getValue(net.minecraft.world.level.block.PoweredRailBlock.POWERED)) {
++                data |= org.snowballmc.snowball.railoptimization.api.RailStateAccess.POWERED_MASK;
++            }
++            this.leaves$railData = (byte) data;
++        }
++        return data;
++    }
++    // Leaves end - rail optimization
++
+     public static final Codec<BlockState> FULL_CODEC = codec(BuiltInRegistries.BLOCK.byNameCodec(), Block::defaultBlockState, Block::getStateDefinition)
+         .stable();
+     private static final Codec<Either<Block, BlockState>> CONSTANT_OR_DISPATCH_CODEC = Codec.either(BuiltInRegistries.BLOCK.byNameCodec(), FULL_CODEC);
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+index 9bf8e7694d4435da398b09778da6a513e0e22b56..d35f3ee894f8cc1a10edb979a7bb0fb9f2853876 100644
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -369,6 +369,9 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+ 
+     @Override
+     public @Nullable BlockState setBlockState(final BlockPos pos, final BlockState state, final @Block.UpdateFlags int flags) {
++        // Leaves start - rail optimization
++        org.snowballmc.snowball.railoptimization.bridge.RailUpdateMemo.onBlockStateChanged(this.getLevel());
++        // Leaves end - rail optimization
+         int y = pos.getY();
+         LevelChunkSection section = this.getSection(this.getSectionIndex(y));
+         boolean wasEmpty = section.hasOnlyAir();

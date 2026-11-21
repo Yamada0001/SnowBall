@@ -44,14 +44,15 @@ out/
 *~
 
 # other stuff
-/leaves-api/build.gradle.kts
-/leaves-server/build.gradle.kts
-/leaves-server/src/minecraft
+/snowball-api/build.gradle.kts
+/snowball-server/build.gradle.kts
+/snowball-server/src/minecraft
 
 /paper-server
 /paper-api
 
 run
+/Study-Leaf/
 
 # other sh
 *.sh

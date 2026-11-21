@@ -1,0 +1,53 @@
+package org.snowballmc.snowball.bot.agent.actions;
+
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.Vec3;
+import org.jetbrains.annotations.NotNull;
+import org.snowballmc.snowball.bot.ServerBot;
+import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
+import org.snowballmc.snowball.entity.bot.actions.CraftUseItemToAction;
+
+public class ServerUseItemToAction extends AbstractUseBotAction<ServerUseItemToAction> {
+
+    public ServerUseItemToAction() {
+        super("use_to");
+    }
+
+    @Override
+    protected boolean interact(@NotNull ServerBot bot) {
+        EntityHitResult hitResult = bot.getEntityHitResult();
+        return useItemTo(bot, hitResult, InteractionHand.MAIN_HAND).consumesAction();
+    }
+
+    public static InteractionResult useItemTo(ServerBot bot, EntityHitResult hitResult, InteractionHand hand) {
+        if (hitResult == null) {
+            return InteractionResult.FAIL;
+        }
+
+        Entity entity = hitResult.getEntity();
+        if (!bot.level().getWorldBorder().isWithinBounds(entity.blockPosition())) {
+            return InteractionResult.FAIL;
+        }
+
+        Vec3 vec3 = hitResult.getLocation().subtract(entity.getX(), entity.getY(), entity.getZ());
+        bot.updateItemInHand(hand);
+        InteractionResult interactionResult = entity.interact(bot, hand, vec3);
+        if (!interactionResult.consumesAction()) {
+            interactionResult = bot.interactOn(hitResult.getEntity(), hand, vec3);
+        }
+
+        if (shouldSwing(interactionResult)) {
+            bot.swing(hand, bot.getItemInHand(hand).getInteractAnimation(), false);
+        }
+
+        return interactionResult;
+    }
+
+    @Override
+    public CraftBotAction<?, ServerUseItemToAction> asCraft() {
+        return new CraftUseItemToAction(this);
+    }
+}

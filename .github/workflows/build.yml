@@ -47,8 +47,8 @@ jobs:
 
       - name: Configure Git
         run: |
-          git config --global user.email "ci@leavesmc.org"
-          git config --global user.name "Leaves CI"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "SnowBall Release CI"
 
       - name: Apply patches
         run: ./gradlew applyAllPatches
@@ -57,34 +57,23 @@ jobs:
       # 每次构建字节都不同。若 leavesclip 的 patch target 与 patches.list 记录的
       # outputHash 来自不同批次，运行时会报 "Patch not applied correctly"。
       # 全量重跑保证两者同批次。
-      - name: Build leavesclip jar
-        run: ./gradlew :leaves-server:createLeavesclipJar --rerun
+      - name: Build SnowBall server jar
+        run: ./gradlew :snowball-server:createLeavesclipJar --rerun
         env:
           BUILD_NUMBER: ${{ github.run_number }}
 
-      - name: Collect artifact
+      - name: Collect SnowBall artifact
         id: meta
+        run: bash scripts/GetReleaseInfo.sh
+
+      - name: Write release notes
+        env:
+          MC_VERSION: ${{ steps.meta.outputs.mc_version }}
+          SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          JAR_NAME: ${{ steps.meta.outputs.jar }}
+          JAR_SHA256: ${{ steps.meta.outputs.sha256 }}
         run: |
           set -euo pipefail
-          mc_version=$(grep -E '^mcVersion=' gradle.properties | cut -d= -f2 | tr -d ' \r')
-          short_sha=$(git rev-parse --short=7 HEAD)
-          tag="${mc_version}-${GITHUB_RUN_NUMBER}-${short_sha}"
-          jar_name="leaves-${mc_version}-${short_sha}.jar"
-
-          built=$(ls -1 leaves-server/build/libs/leaves-leavesclip-*.jar | head -n 1)
-          if [ -z "$built" ]; then
-            echo "::error::没有找到 leavesclip 产物"
-            exit 1
-          fi
-          cp "$built" "$jar_name"
-
-          {
-            echo "tag=$tag"
-            echo "jar=$jar_name"
-            echo "name=Leaves $tag"
-            echo "sha256=$(sha256sum "$jar_name" | cut -d' ' -f1)"
-          } >> "$GITHUB_OUTPUT"
-
           {
             echo "### 提交"
             echo
@@ -94,16 +83,16 @@ jobs:
             echo
             echo "| 项目 | 值 |"
             echo "| --- | --- |"
-            echo "| Minecraft | ${mc_version} |"
+            echo "| Minecraft | ${MC_VERSION} |"
             echo "| 构建号 | ${GITHUB_RUN_NUMBER} |"
-            echo "| 提交 | \`${short_sha}\` |"
+            echo "| 提交 | \`${SHORT_SHA}\` |"
             echo "| 分支 | \`${GITHUB_REF_NAME}\` |"
             echo "| Java | 25 |"
             echo
             echo "### 校验"
             echo
             echo '```'
-            echo "$(sha256sum "$jar_name")"
+            printf '%s  %s\n' "$JAR_SHA256" "$JAR_NAME"
             echo '```'
           } > release-notes.md
 
@@ -111,7 +100,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.jar }}
-          path: ${{ steps.meta.outputs.jar }}
+          path: ${{ steps.meta.outputs.artifact }}
           if-no-files-found: error
 
       - name: Create Release
@@ -121,7 +110,7 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.name }}
           body_path: release-notes.md
-          files: ${{ steps.meta.outputs.jar }}
+          files: ${{ steps.meta.outputs.artifact }}
           draft: false
           prerelease: ${{ inputs.prerelease == true }}
           make_latest: ${{ inputs.prerelease != true }}

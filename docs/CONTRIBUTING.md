@@ -1,7 +1,7 @@
-Contributing to Leaves
+Contributing to SnowBall
 ===========
 
-**English** | [中文](https://github.com/LeavesMC/Leaves/blob/master/docs/CONTRIBUTING_cn.md)
+**English** | [中文](CONTRIBUTING_cn.md)
 
 We're glad that you want to contribute to our project!  
 In general, our review of pull requests is very lenient.  
@@ -23,18 +23,16 @@ See also [This issue](https://github.com/isaacs/github/issues/1681), and then yo
 Before coding, you need these softwares / tools as Dev Environment.
 
 - `git`
-- `JDK 21 or higher`
-  - We used Gradle's toolchains, so you can build Leaves using JRE 8. (When Gradle can't find JDK 21, it will download it automatically.)
+- JDK 25 (use the Gradle wrapper).
 
 If you're using Windows Operating System, you can use `WSL` to speed up building.
 
 ## Understanding "Patches"
 
-Leaves uses as the same patching system as Paper,  
-and has been divided into two directories for the purpose of modifying different parts of it:
+SnowBall uses Paper's patching system, with two modules for different parts of the source:
 
-- `leaves-api` - Modifications to `Paper-API` / `Spigot-API` / `Bukkit`.
-- `leaves-server` - Modifications to `Paper` / `Spigot` / `CraftBukkit`.
+- `snowball-api` - Modifications to `Paper-API` / `Spigot-API` / `Bukkit`.
+- `snowball-server` - Modifications to `Paper` / `Spigot` / `CraftBukkit`.
 
 The patching system is based on git, and you can learn about it at here: <https://git-scm.com/docs/gittutorial>
 
@@ -42,9 +40,9 @@ If you have forked the main repository, then you should follow the steps below:
 
 1. Clone your repository to local
 2. Run Gradle's `applyAllPatches` task in your IDE or terminal (You can run `./gradlew applyAllPatches` directly in terminal.)
-3. Enter `leaves-api` or `leaves-server` directory to carry out modifications.
+3. Enter `snowball-api` or `snowball-server` directory to carry out modifications.
 
-BTW, `leaves-api` and `leaves-server` are not normal git repositories.
+BTW, `snowball-api` and `snowball-server` are not normal git repositories.
 
 - Before applying patches, the base will point to unmodified source code.
 - Every commit after the base is a patch.
@@ -54,7 +52,7 @@ BTW, `leaves-api` and `leaves-server` are not normal git repositories.
 
 It's very easy to to add patches by following the steps below:
 
-1. Modify the code of `leaves-api` and / or `leaves-server`
+1. Modify the code of `snowball-api` and / or `snowball-server`
 2. Add these changes to the local git repository (For example, `git add .`)
 3. Commit these changes using `git commit -m <Commit Message>`
 4. Run Gradle's task `rebuildAllServerPatches` to convert your commits to a new patch

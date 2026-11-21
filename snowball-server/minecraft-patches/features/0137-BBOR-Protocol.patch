@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: violetc <58360096+s-yh-china@users.noreply.github.com>
+Date: Mon, 3 Feb 2025 13:03:42 +0800
+Subject: [PATCH] BBOR Protocol
+
+
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+index b1878c200d06e85d2fcc464d392f3da96ab6b7a0..d3487afe1a7e4acd9c8444cb2bee4e3a4f447a9a 100644
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -753,6 +753,11 @@ public class LevelChunk extends ChunkAccess implements DebugValueSource, ca.spot
+ 
+     public void setLoaded(final boolean loaded) {
+         this.loaded = loaded;
++        // Leaves start - bbor
++        if (loaded) {
++            org.snowballmc.snowball.protocol.BBORProtocol.onChunkLoaded(this);
++        }
++        // Leaves end - bbor
+     }
+ 
+     public Level getLevel() {

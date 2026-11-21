@@ -1,62 +1,37 @@
-Leaves
-===========
-
-[![Leaves CI](https://github.com/LeavesMC/Leaves/actions/workflows/build.yml/badge.svg)](https://github.com/LeavesMC/Leaves/actions/workflows/leaves.yml)
-[![Leaves Download](https://img.shields.io/github/downloads/LeavesMC/Leaves/total?color=0&logo=github)](https://github.com/LeavesMC/Leaves/releases/latest)
-[![Discord](https://badgen.net/discord/online-members/5hgtU72w33?icon=discord&label=Discord&list=what)](https://discord.gg/5hgtU72w33)
-[![QQ](https://img.shields.io/badge/QQ_Unofficial-815857713-blue)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=nisbmnCFeEJCcYWBQ10th4Fu99XWklH4&authKey=8VlUxSdrFCIwmIpxFQIGR8%2BXvIQ2II%2Bx2JfxuQ8amr9UKgINh%2BdXjudQfc%2FIeTO5&noverify=0&group_code=815857713)
+# SnowBall
 
 [English](README.md) | **中文**
 
-> 一个致力于修复原版服务端被破坏特性的 [Paper](https://github.com/PaperMC/Paper) 分支
+SnowBall 是基于 [Leaves](https://github.com/LeavesMC/Leaves) 和 [Paper](https://github.com/PaperMC/Paper) 的 Minecraft Java 版服务端，保留原版机制修复、假人及可选性能优化。当前游戏版本为 **26.3**，Paper 的源码提交固定在 [gradle.properties](gradle.properties)。
 
-> 你可以在 [这里](https://docs.leavesmc.org/zh_Hans/leaves/reference/configuration) 查看所有的修改和修复内容
+## 构建与运行
 
-## 对于服务器管理员
-此分支使用与 Paper 一致的 leavesclip(paperclip的分支) 分发
+安装 JDK 25，然后在仓库根目录运行：
 
-你可以从 [此处](https://github.com/LeavesMC/Leaves/releases/latest) 下载最新的构建结果 (1.21.x)
+```bash
+./gradlew applyAllPatches
+./gradlew :snowball-server:createLeavesclipJar --rerun
+bash scripts/GetReleaseInfo.sh --artifact-path
+```
 
-也可以通过 [此处](#自行构建) 的指南自行构建
+Windows 可以将 `./gradlew` 换成 `gradlew.bat`，最后一条命令在 Git Bash 中执行，也可以直接查看 `snowball-server/build/libs`。可运行的服务端包名为 `SnowBall-{游戏版本}-{Git 短提交号}.jar`，例如 `SnowBall-26.3-2c62d77.jar`。从未提交的工作区构建时，文件名仍使用当前 HEAD 的短提交号。
 
-如果你想要获得更多信息，那么你可以访问我们的 [文档](https://docs.leavesmc.org/zh_Hans/leaves/guides/getting-started)
+也可以从本仓库的 Releases 页面下载已发布的构建。运行 `java -jar SnowBall-26.3-2c62d77.jar --nogui`，将示例文件名换成实际下载或构建的文件名。
 
-## 对于插件开发者
-Leaves-API:
-```kotlin
-maven {
-    name = "leavesmc-repo"
-    url = "https://repo.leavesmc.org/snapshots/"
-}
+升级前请备份服务端。原有的 `config/leaves.yml` 和 `config/SnowBall.yml` 都应保留；`/leaves` 命令仍然可用。若旧服务端只识别旧格式的发布文件名，第一次升级到 SnowBall 需要手动换包。
 
-dependencies {
-    compileOnly("org.leavesmc.leaves:leaves-api:1.21.10-R0.1-SNAPSHOT")
-}
- ```
+## 插件开发
 
-如果你要将 Leaves 作为依赖,那么你必须进行 [自行构建](#自行构建)
+Gradle 模块为 `snowball-api` 和 `snowball-server`。只使用 Bukkit 或 Paper API 的插件无需修改导入；使用旧扩展 API 的插件要把导入更新为 `org.snowballmc.snowball` 并重新编译，旧插件二进制不会自动映射到新包名。
 
-Leaves-Server:
+应用补丁后，可用 `./gradlew :snowball-api:publishToMavenLocal` 发布到本地 Maven。在插件工程中添加 `mavenLocal()` 和以下依赖，版本号与 [gradle.properties](gradle.properties) 保持一致：
+
 ```kotlin
 dependencies {
-    compileOnly("org.leavesmc.leaves:leaves:1.21.10-R0.1-SNAPSHOT")
+    compileOnly("org.snowballmc.snowball:snowball-api:26.3-R0.1-SNAPSHOT")
 }
- ```
+```
 
-## 自行构建
+Maven 版本后缀不是 Paper 上游的发布渠道。GitHub Releases 用于分发；只有显式设置 `snowballMavenUrl` 时才配置远程 Maven 发布，所用凭据变量为 `SNOWBALL_MAVEN_USERNAME` 和 `SNOWBALL_MAVEN_PASSWORD`。
 
-你需要最低 JDK 21 和一个可以正常访问各种 git/maven 库的网络
-
-首先克隆此储存库，然后在你的终端里依次执行 `./gradlew applyAllPatches` 和 `./gradlew createMojmapLeavesclipJar`
-
-最后 你可以在 `leaves-server/build/libs` 文件夹里找到对应的jar文件
-
-## 对于想要出一份力的开发者
-
-可查看 [贡献须知](docs/CONTRIBUTING_cn.md)
-
-## 特别感谢
-
-[<img src="https://user-images.githubusercontent.com/21148213/121807008-8ffc6700-cc52-11eb-96a7-2f6f260f8fda.png" alt="" width="150">](https://www.jetbrains.com)
-
-[JetBrains](https://www.jetbrains.com/)，IntelliJ IDEA 的创造者，为 Leaves 提供了 [开源许可证](https://www.jetbrains.com/opensource/)。我们极力推荐使用 IntelliJ IDEA 作为你的 IDE。
+通过 `./gradlew :snowball-api:test :snowball-server:test` 验证改动。补丁流程见[贡献须知](docs/CONTRIBUTING_cn.md)，许可与上游署名见 [LICENSE](LICENSE.md)。

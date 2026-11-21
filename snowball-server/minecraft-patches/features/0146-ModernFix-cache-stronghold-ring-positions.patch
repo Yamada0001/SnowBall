@@ -1,0 +1,65 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 13:00:00 +0800
+Subject: [PATCH] ModernFix cache stronghold ring positions
+
+Caches the concentric-ring stronghold positions per (world, structure set,
+placement geometry, effective seed) so repeated queries do not resample the
+whole ring set and re-run the biome predicate for every candidate.
+
+This patch is Powered by ModernFix(https://github.com/embeddedt/ModernFix)
+
+This patch is based on the following mixins:
+* "org/embeddedt/modernfix/common/mixin/perf/cache_strongholds/*.java"
+By: embeddedt
+As part of: ModernFix (https://github.com/embeddedt/ModernFix)
+Licensed under: LGPL-3.0 (https://www.gnu.org/licenses/lgpl-3.0.html)
+
+Two deliberate deviations from upstream:
+
+1. The cache key uses the *effective* ring seed. Paper lets the server
+   configured `stronghold-seed` override `concentricRingsSeed`, and the
+   upstream mod only keys on the latter, so servers using that option would
+   read stale ring positions.
+2. The dedicated ring-computation thread pool is not ported. Upstream creates
+   a fresh pool per call and shuts it down in a `finally`, which races with
+   the asynchronous tasks it just submitted. The shared background executor is
+   kept instead; the cache is where the win is.
+
+The cache is in-memory only and never evicted; entries are keyed by the
+generator state identity, so a world that is unloaded and reloaded in one
+process is recomputed rather than served stale data.
+
+diff --git a/net/minecraft/world/level/chunk/ChunkGeneratorStructureState.java b/net/minecraft/world/level/chunk/ChunkGeneratorStructureState.java
+index 8547fccf2216867147adcefa3e58a2c9ce58eadb..e9f8427205752c53ca02e20399fa0279dfc1628a 100644
+--- a/net/minecraft/world/level/chunk/ChunkGeneratorStructureState.java
++++ b/net/minecraft/world/level/chunk/ChunkGeneratorStructureState.java
+@@ -172,6 +172,28 @@ public class ChunkGeneratorStructureState {
+     }
+ 
+     private CompletableFuture<List<ChunkPos>> generateRingPositions(final Holder<StructureSet> structureSet, final ConcentricRingsStructurePlacement placement) {
++        // Leaves start - modernfix: cache stronghold ring positions
++        if (org.snowballmc.snowball.LeavesConfig.performance.modernfixCacheStrongholds) {
++            return org.snowballmc.snowball.modernfix.bridge.StrongholdCache.wrap(this, structureSet, placement,
++                    this.leaves$effectiveRingSeed(structureSet),
++                    () -> this.leaves$generateRingPositions0(structureSet, placement));
++        }
++        // Leaves end - modernfix: cache stronghold ring positions
++        return this.leaves$generateRingPositions0(structureSet, placement);
++    }
++
++    // Leaves start - modernfix: cache stronghold ring positions
++    private long leaves$effectiveRingSeed(final Holder<StructureSet> structureSet) {
++        // Paper 会让服务器配置的 stronghold-seed 覆盖 concentricRingsSeed，
++        // 缓存键必须用「实际生效」的那个，否则配了 stronghold-seed 的服务器会读到错误环位。
++        return this.config.strongholdSeed != null
++                && structureSet.is(net.minecraft.world.level.levelgen.structure.BuiltinStructureSets.STRONGHOLDS)
++                ? this.config.strongholdSeed
++                : this.concentricRingsSeed;
++    }
++    // Leaves end - modernfix: cache stronghold ring positions
++
++    private CompletableFuture<List<ChunkPos>> leaves$generateRingPositions0(final Holder<StructureSet> structureSet, final ConcentricRingsStructurePlacement placement) {
+         if (placement.count() == 0) {
+             return CompletableFuture.completedFuture(List.of());
+         }

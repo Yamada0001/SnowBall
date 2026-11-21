@@ -1,0 +1,118 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 14:00:00 +0800
+Subject: [PATCH] Cerulean inventory change trigger throttle
+
+Short-circuits the inventory changed criterion trigger. Vanilla scans the whole
+inventory and evaluates every registered predicate on each item change; most
+changes cannot possibly advance any advancement, so they are filtered out
+before the scan happens.
+
+This patch is Powered by Cerulean(https://github.com/noramibu/Cerulean) and
+includes work by its author. Ported with explicit permission from the original
+author; copyright in the ported logic remains with them.
+
+This patch is based on the following mixins:
+* "toni/cerulean/mixin/InventoryChangeTriggerMixin.java"
+* "toni/cerulean/mixin/ItemStackMixin.java"
+* "toni/cerulean/mixin/AbstractContainerMenuMixin.java"
+By: noramibu
+As part of: Cerulean (https://github.com/noramibu/Cerulean)
+
+Ported subset: sampling throttle, emptied-stack skip, decreased-stack skip and
+lastSlots initialisation. The three predicate-level optimisations of the
+original mod (multi-predicate shortcut, stack-size threshold gate and
+count-before-match) are NOT ported: they rely on `@Local` capture of a list
+built inside a heavily patched method and on a resource-reload listener, both
+of which are too fragile to reproduce reliably as a source patch.
+
+Every short-circuit here changes observable behaviour for custom advancements
+that count cumulative pickups, so all four options default to false.
+
+diff --git a/net/minecraft/advancements/triggers/InventoryChangeTrigger.java b/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
+index 399203f83bd406c748708987a7de2cb4b0e9ee4d..d1793565d27faac5e8e376d16c891bb9440fcb14 100644
+--- a/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
++++ b/net/minecraft/advancements/triggers/InventoryChangeTrigger.java
+@@ -24,6 +24,21 @@ public class InventoryChangeTrigger extends SimpleCriterionTrigger<InventoryChan
+     }
+ 
+     public void trigger(final ServerPlayer player, final Inventory inventory, final ItemStack changedItem) {
++        // Leaves start - Cerulean
++        // 下面三条短路都会跳过一部分原本执行的条件判定，因此各自独立开关、默认关闭。
++        if (org.snowballmc.snowball.LeavesConfig.performance.ceruleanSkipTicks
++                && org.snowballmc.snowball.cerulean.bridge.TriggerThrottle.skipBySampling(player, changedItem)) {
++            return;
++        }
++        if (org.snowballmc.snowball.LeavesConfig.performance.ceruleanIgnoreEmptiedStacks
++                && org.snowballmc.snowball.cerulean.bridge.TriggerThrottle.skipEmptied(changedItem)) {
++            return;
++        }
++        if (org.snowballmc.snowball.LeavesConfig.performance.ceruleanIgnoreDecreasedStacks
++                && org.snowballmc.snowball.cerulean.bridge.TriggerThrottle.skipDecreased(changedItem)) {
++            return;
++        }
++        // Leaves end - Cerulean
+         int slotsFull = 0;
+         int slotsEmpty = 0;
+         int slotsOccupied = 0;
+diff --git a/net/minecraft/world/inventory/AbstractContainerMenu.java b/net/minecraft/world/inventory/AbstractContainerMenu.java
+index 4a29c2d69e551a9ea061a11cd7507468334af6d2..37adbf8a0e828fb0733cb84374aeb18020928172 100644
+--- a/net/minecraft/world/inventory/AbstractContainerMenu.java
++++ b/net/minecraft/world/inventory/AbstractContainerMenu.java
+@@ -156,7 +156,13 @@ public abstract class AbstractContainerMenu {
+     protected Slot addSlot(final Slot slot) {
+         slot.index = this.slots.size();
+         this.slots.add(slot);
+-        this.lastSlots.add(ItemStack.EMPTY);
++        // Leaves start - Cerulean
++        // 直接把容器里已有的物品作为「上次快照」，避免首次同步时逐槽触发一次物品变动判定。
++        this.lastSlots.add(org.snowballmc.snowball.LeavesConfig.performance.ceruleanInitLastSlots
++                && slot.container instanceof net.minecraft.world.Container && slot.hasItem()
++                ? slot.getItem()
++                : ItemStack.EMPTY);
++        // Leaves end - Cerulean
+         this.remoteSlots.add(this.synchronizer != null ? this.synchronizer.createSlot() : RemoteSlot.PLACEHOLDER);
+         return slot;
+     }
+@@ -315,6 +321,12 @@ public abstract class AbstractContainerMenu {
+         if (!ItemStack.matches(localExpected, current)) {
+             ItemStack newItem = currentCopy.get();
+             this.lastSlots.set(i, newItem);
++            // Leaves start - Cerulean
++            if (org.snowballmc.snowball.LeavesConfig.performance.ceruleanSkipTicks
++                    || org.snowballmc.snowball.LeavesConfig.performance.ceruleanIgnoreDecreasedStacks) {
++                org.snowballmc.snowball.cerulean.bridge.TriggerThrottle.recordPreviousSize(localExpected, newItem);
++            }
++            // Leaves end - Cerulean
+ 
+             for (ContainerListener containerListener : this.containerListeners) {
+                 containerListener.slotChanged(this, i, localExpected, newItem); // Paper - Add PlayerInventorySlotChangeEvent
+diff --git a/net/minecraft/world/item/ItemStack.java b/net/minecraft/world/item/ItemStack.java
+index e32b2db3ef707c155b844445ede364981321ea11..d90e1a37f12af2b85178a174a2c28dc64d4768c2 100644
+--- a/net/minecraft/world/item/ItemStack.java
++++ b/net/minecraft/world/item/ItemStack.java
+@@ -104,7 +104,23 @@ import org.snowballmc.snowball.lithium.common.util.change_tracking.ChangePublisher;
+ import org.snowballmc.snowball.lithium.common.util.change_tracking.ChangeSubscriber;
+ // Leaves end - Lithium Sleeping Block Entity
+ 
+-public final class ItemStack implements DataComponentHolder, ItemInstance, ChangePublisher<net.minecraft.world.item.ItemStack>, ChangeSubscriber<PatchedDataComponentMap> { // Leaves - Lithium Sleeping Block Entity
++public final class ItemStack implements DataComponentHolder, ItemInstance, ChangePublisher<net.minecraft.world.item.ItemStack>, ChangeSubscriber<PatchedDataComponentMap>, org.snowballmc.snowball.cerulean.bridge.ItemStackDelta { // Leaves - Lithium Sleeping Block Entity // Leaves - Cerulean
++
++    // Leaves start - Cerulean
++    /** 本次变动之前的堆叠数量，供物品变动触发做阈值比较。 */
++    private int cerulean$previousStackSize;
++
++    @Override
++    public int cerulean$getPreviousStackSize() {
++        return this.cerulean$previousStackSize;
++    }
++
++    @Override
++    public void cerulean$setPreviousStackSize(final int value) {
++        this.cerulean$previousStackSize = value;
++    }
++    // Leaves end - Cerulean
++
+     private static final List<Component> OP_NBT_WARNING = List.of(
+         Component.translatable("item.op_warning.line1").withStyle(ChatFormatting.RED, ChatFormatting.BOLD),
+         Component.translatable("item.op_warning.line2").withStyle(ChatFormatting.RED),

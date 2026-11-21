@@ -10,10 +10,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        在汇报前，请确认您是否使用最新版本的 Leaves
+        在汇报前，请确认您是否使用最新版本的 SnowBall
         Before report, please make sure you are using the latest version.<br>
-        请详细描述您所遇到的非原版表现。确保您**真的**遇到了 **Leaves 导致的** 与**当前原版版本**不符的特性，而非插件或客户端导致的或是原版版本差异导致的。
-        Please describe the non-vanilla behavior you encountered in detail. Make sure you're **actually** hitting a **Leaves-caused** feature that is **different from the current vanilla version**, not caused by plugins or clients or version differences.<br>
+        请详细描述您所遇到的非原版表现。确保您**真的**遇到了 **SnowBall 导致的** 与**当前原版版本**不符的特性，而非插件或客户端导致的或是原版版本差异导致的。
+        Please describe the non-vanilla behavior you encountered in detail. Make sure you're **actually** hitting a **SnowBall-caused** feature that is **different from the current vanilla version**, not caused by plugins or clients or version differences.<br>
         如果您确定的话，就按照下面的模板填充信息，并提交反馈。
         If you are sure, follow the template below to fill in the information and submit your feedback.<br>
         如果这个问题被尝试修复，您可以帮助我们测试并回复。若确认修复，您可以关闭 issue 来告知开发者。
@@ -21,12 +21,12 @@ body:
   - type: input
     id: leaves-version
     attributes:
-      label: 服务端版本 Leaves Version
+      label: 服务端版本 SnowBall Version
       description:
-        Leaves服务端发行版本 Leaves server release version (contains the git commit's hash)<br>
+        SnowBall服务端发行版本 SnowBall server release version (contains the git commit's hash)<br>
         通过执行`/version`命令将获取到的内容复制到这里。 Run `/version` on your server and paste the full, unmodified output here.
       placeholder: >
-        e.g. This server is running Leaves version 1.21.1-79-master@21c276f (2024-11-15T15:39:36Z) (Implementing API version 1.21.1-R0.1-SNAPSHOT)
+        e.g. This server is running SnowBall version 1.21.1-79-master@21c276f (2024-11-15T15:39:36Z) (Implementing API version 1.21.1-R0.1-SNAPSHOT)
     validations:
       required: true
   - type: textarea

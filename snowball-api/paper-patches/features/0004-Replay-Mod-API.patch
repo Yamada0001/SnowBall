@@ -1,0 +1,34 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Lumine1909 <133463833+Lumine1909@users.noreply.github.com>
+Date: Sat, 17 May 2025 17:36:22 +0800
+Subject: [PATCH] Replay Mod API
+
+
+diff --git a/src/main/java/org/bukkit/Bukkit.java b/src/main/java/org/bukkit/Bukkit.java
+index fd43ae39a7db49f06b412adcc525afa86da9ffab..d0dc42bc30e81b6d7283dc1b3a42cab55fecafc7 100644
+--- a/src/main/java/org/bukkit/Bukkit.java
++++ b/src/main/java/org/bukkit/Bukkit.java
+@@ -3021,4 +3021,10 @@ public final class Bukkit {
+         return server.getBotManager();
+     }
+     // Leaves end - Bot API
++
++    // Leaves start - Photographer API
++    public static @NotNull org.snowballmc.snowball.entity.photographer.PhotographerManager getPhotographerManager() {
++        return server.getPhotographerManager();
++    }
++    // Leaves end - Photographer API
+ }
+diff --git a/src/main/java/org/bukkit/Server.java b/src/main/java/org/bukkit/Server.java
+index 44f8945353614ced8fc20ff4cf5e17222700760c..4b37b44ff78503d4a1de808f5d429605f0de289c 100644
+--- a/src/main/java/org/bukkit/Server.java
++++ b/src/main/java/org/bukkit/Server.java
+@@ -2785,4 +2785,8 @@ public interface Server extends PluginMessageRecipient, net.kyori.adventure.audi
+      */
+     @NotNull org.snowballmc.snowball.entity.bot.BotManager getBotManager();
+     // Leaves end - Bot API
++
++    // Leaves start - Photographer API
++    @NotNull org.snowballmc.snowball.entity.photographer.PhotographerManager getPhotographerManager();
++    // Leaves end - Photographer API
+ }

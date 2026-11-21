@@ -1,0 +1,297 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 10:40:00 +0800
+Subject: [PATCH] Command NBT selector optimizations
+
+Bellows speeds up the two hot paths of datapack-heavy servers: the NBT tree
+that `/data` has to serialise for an entity, and the whole-dimension scan that
+`@e` performs.
+
+For the NBT side this port does NOT copy vanilla's per-field `save`/`load`
+dispatch, which is what the upstream mod has to do. Upstream needs 18 mixins to
+clone `saveWithoutId`/`load` field by field, because the loader offers no hook;
+here the sources are available, so `EntityDataAccessor#getData` instead runs the
+real `Entity#saveWithoutId` through a `FilteringValueOutput` view that lets only
+the top-level keys the datapack asked for reach the `TagValueOutput`. One wrapper
+replaces 18 mixins and can never drift from upstream save logic.
+
+Only the pure-read paths are routed through it: `data get`, `data get <path>`,
+the source side of `data modify`, `execute if data`, and the `nbt=` predicate of
+selectors and advancements. The read-modify-write paths (`data modify`,
+`data remove`, `data merge`, `execute store ... data`) deliberately keep the
+vanilla full serialisation, because `DataAccessor#setData` feeds `Entity#load`,
+which resets every key absent from the tag (`Pos` falls back to zero, `Tags` is
+cleared, `data` is reset to empty). Filtering the read side there would teleport
+entities to 0,0,0 and wipe their tags and custom data, so those call sites are
+left byte-for-byte vanilla.
+
+For the selector side, the parser records the positive `type=`/`tag=` constraints
+of each selector into `SelectorHints`, and `EntitySelector#addEntities` may then
+resolve `@e` against a type/tag inverted index maintained by the entity lookup,
+instead of walking every entity of the dimension. The hints are recovered by
+scanning the raw selector text, so no `lambda$bootStrap$NN` ordinal anchors are
+involved. Moonrise's `EntityLookup` is the lookup actually used on this branch,
+so the index hangs off it, and every candidate is re-checked against
+`EntityLookup.getEntityStatus(...).isAccessible()` before it reaches the
+predicate; hidden and already-removed entities therefore cannot leak into
+results. Indexing is skipped whenever the selector carries an explicit limit,
+because then the result set is order-sensitive.
+
+Everything is gated behind three `leaves.yml` options that default to off; with
+them disabled every injected line falls through to the original code.
+
+This patch is Powered by Bellows(https://github.com/Smithed-MC/Bellows)
+
+This patch is based on the following mixins:
+* "net/smithed/bellows/mixin/nbt/DataCommandsMixin.java"
+* "net/smithed/bellows/mixin/nbt/NbtPredicateMixin.java"
+* "net/smithed/bellows/mixin/nbt/EntityDataAccessorMixin.java"
+* "net/smithed/bellows/mixin/nbt/ExecuteCommandMixin.java"
+* "net/smithed/bellows/mixin/nbt/entity/DisplayMixin.java"
+* "net/smithed/bellows/mixin/selector/EntitySelectorMixin.java"
+* "net/smithed/bellows/mixin/selector/EntitySelectorOptionsMixin.java"
+* "net/smithed/bellows/mixin/selector/EntitySelectorParserMixin.java"
+* "net/smithed/bellows/mixin/selector/EntityMixin.java"
+* "net/smithed/bellows/mixin/selector/moonrise/MoonriseEntityLookupMixin.java"
+By: Smithed-MC
+As part of: Bellows (https://github.com/Smithed-MC/Bellows)
+Licensed under: MIT (https://github.com/Smithed-MC/Bellows/blob/master/LICENSE)
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+index 99b5026d8dfa9668caf15e9ae27619d9d433b441..14046cb3878afdcb1c302976320bfd8cd7c53a18 100644
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/level/entity/EntityLookup.java
+@@ -454,6 +454,12 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+ 
+         this.entityStatusChange(entity, slices, Visibility.HIDDEN, getEntityStatus(entity), false, !fromDisk, false);
+ 
++        // Leaves start - Bellows Selector
++        if (org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations) {
++            org.snowballmc.snowball.bellows.BellowsEntityIndex.of(this).add(entity);
++        }
++        // Leaves end - Bellows Selector
++
+         return true;
+     }
+ 
+@@ -513,6 +519,12 @@ public abstract class EntityLookup implements LevelEntityGetter<Entity> {
+             LOGGER.warn("Failed to remove entity " + entity + " by uuid, current entity mapped: " + currentlyMappedArr[0]);
+         }
+ 
++        // Leaves start - Bellows Selector
++        if (org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations) {
++            org.snowballmc.snowball.bellows.BellowsEntityIndex.of(this).remove(entity);
++        }
++        // Leaves end - Bellows Selector
++
+         if (slices != null && slices.isEmpty()) {
+             this.onEmptySlices(sectionX, sectionZ);
+         }
+diff --git a/net/minecraft/advancements/predicates/NbtPredicate.java b/net/minecraft/advancements/predicates/NbtPredicate.java
+index fe1fb1e3773e3efe7f228275b8753981db7cfa7a..4baf31348b053af3a36c8407068834bf550808e2 100644
+--- a/net/minecraft/advancements/predicates/NbtPredicate.java
++++ b/net/minecraft/advancements/predicates/NbtPredicate.java
+@@ -32,6 +32,13 @@ public record NbtPredicate(CompoundTag tag) {
+     }
+ 
+     public boolean matches(final Entity entity) {
++        // Leaves start - Bellows NBT
++        // 只序列化本谓词关心的顶层键；返回 null 时落回下面的原版全量路径
++        final CompoundTag bellows$filtered = org.snowballmc.snowball.bellows.BellowsNbt.filteredSaveForPredicate(entity, this.tag());
++        if (bellows$filtered != null) {
++            return this.matches(bellows$filtered);
++        }
++        // Leaves end - Bellows NBT
+         return this.matches(getEntityTagToCompare(entity));
+     }
+ 
+diff --git a/net/minecraft/commands/arguments/selector/EntitySelector.java b/net/minecraft/commands/arguments/selector/EntitySelector.java
+index faee912129c2cc6303b494523efcee599e856161..44bb9c481c77f18f438192ccfa1e78a5558c156a 100644
+--- a/net/minecraft/commands/arguments/selector/EntitySelector.java
++++ b/net/minecraft/commands/arguments/selector/EntitySelector.java
+@@ -67,6 +67,10 @@ public class EntitySelector {
+     private final @Nullable UUID entityUUID;
+     private final EntityTypeTest<Entity, ?> type;
+     private final boolean usesSelector;
++    // Leaves start - Bellows Selector
++    /** 解析期收集的索引提示；{@code null} 表示不可优化。 */
++    public org.snowballmc.snowball.bellows.@Nullable SelectorHints bellows$hints;
++    // Leaves end - Bellows Selector
+ 
+     public EntitySelector(
+         final int maxResults,
+@@ -186,6 +190,14 @@ public class EntitySelector {
+     private void addEntities(final List<Entity> result, final ServerLevel level, final @Nullable AABB absoluteAABB, final Predicate<Entity> predicate) {
+         int limit = this.getResultLimit();
+         if (result.size() < limit) {
++            // Leaves start - Bellows Selector
++            // 只有"无 AABB 的全局搜索"才走索引：带 AABB 时原版按区块裁剪本就更省，
++            // 且索引候选集可能横跨整个维度，反而更慢。
++            if (absoluteAABB == null && org.snowballmc.snowball.bellows.BellowsEntityIndex.tryCollect(
++                level.moonrise$getEntityLookup(), this.type, predicate, result, limit, this.bellows$hints)) {
++                return;
++            }
++            // Leaves end - Bellows Selector
+             if (absoluteAABB != null) {
+                 level.getEntities(this.type, absoluteAABB, predicate, result, limit);
+             } else {
+diff --git a/net/minecraft/commands/arguments/selector/EntitySelectorParser.java b/net/minecraft/commands/arguments/selector/EntitySelectorParser.java
+index d15219cfc49d462f0b6498c67bbc5e092dc52d42..56637061502a899fbacd4719072c243880657ac2 100644
+--- a/net/minecraft/commands/arguments/selector/EntitySelectorParser.java
++++ b/net/minecraft/commands/arguments/selector/EntitySelectorParser.java
+@@ -484,7 +484,14 @@ public class EntitySelectorParser {
+         }
+ 
+         this.finalizePredicates();
+-        return this.getSelector();
++        // Leaves start - Bellows Selector
++        // 从原始选择器文本里扫出 type=/tag= 约束，不依赖任何 lambda 序号
++        final EntitySelector bellows$selector = this.getSelector();
++        if (org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations) {
++            bellows$selector.bellows$hints = org.snowballmc.snowball.bellows.SelectorHintsScanner.scan(this.reader, this.startPosition);
++        }
++        return bellows$selector;
++        // Leaves end - Bellows Selector
+     }
+ 
+     private static void fillSelectorSuggestions(final SuggestionsBuilder builder) {
+diff --git a/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java b/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
+index 0897a2c1538f0cb572848c6ef7d0edfb172e2dea..4d5f369d5813a2c9cb2e58377beb3d85c9755081 100644
+--- a/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
++++ b/net/minecraft/commands/arguments/selector/options/EntitySelectorOptions.java
+@@ -327,6 +327,13 @@ public class EntitySelectorOptions {
+                 boolean inverted = parser.shouldInvertValue();
+                 CompoundTag tag = TagParser.parseCompoundAsArgument(parser.getReader());
+                 parser.addPredicate(e -> {
++                    // Leaves start - Bellows NBT
++                    // 只序列化本谓词关心的顶层键；返回 null 时落回下面的原版全量路径
++                    final CompoundTag bellows$filtered = org.snowballmc.snowball.bellows.BellowsNbt.filteredSaveForPredicate(e, tag);
++                    if (bellows$filtered != null) {
++                        return NbtUtils.compareNbt(tag, bellows$filtered, true) != inverted;
++                    }
++                    // Leaves end - Bellows NBT
+                     try (ProblemReporter.ScopedCollector reporter = new ProblemReporter.ScopedCollector(e.problemPath(), LOGGER)) {
+                         TagValueOutput output = TagValueOutput.createWithContext(reporter, e.registryAccess());
+                         e.saveWithoutId(output);
+diff --git a/net/minecraft/server/commands/ExecuteCommand.java b/net/minecraft/server/commands/ExecuteCommand.java
+index 1a3de1a672b3157e7433b83252b798aa08ca8ed5..c9734c50aa801f8224289d1ad811303a5a0c246a 100644
+--- a/net/minecraft/server/commands/ExecuteCommand.java
++++ b/net/minecraft/server/commands/ExecuteCommand.java
+@@ -777,7 +777,7 @@ public class ExecuteCommand {
+     }
+ 
+     private static int checkMatchingData(final DataAccessor accessor, final NbtPathArgument.NbtPath path) throws CommandSyntaxException {
+-        return path.countMatching(accessor.getData());
++        return path.countMatching(org.snowballmc.snowball.bellows.BellowsCommands.getData(accessor, path.asString())); // Leaves - Bellows NBT
+     }
+ 
+     private static boolean checkScore(final CommandContext<CommandSourceStack> context, final ExecuteCommand.IntBiPredicate operation) throws CommandSyntaxException {
+diff --git a/net/minecraft/server/commands/data/DataCommands.java b/net/minecraft/server/commands/data/DataCommands.java
+index b3539df4b3427d275e351f9fe4fa16331d1a420d..c1ca905e7b7f03af3e2facb214c2410c4bf9707c 100644
+--- a/net/minecraft/server/commands/data/DataCommands.java
++++ b/net/minecraft/server/commands/data/DataCommands.java
+@@ -334,7 +334,7 @@ public class DataCommands {
+     private static List<Tag> resolveSourcePath(final CommandContext<CommandSourceStack> context, final ArgProvider<DataAccessor> sourceProvider) throws CommandSyntaxException {
+         DataAccessor source = sourceProvider.access(context);
+         NbtPathArgument.NbtPath sourcePath = NbtPathArgument.getPath(context, "sourcePath");
+-        return sourcePath.get(source.getData());
++        return sourcePath.get(org.snowballmc.snowball.bellows.BellowsCommands.getData(source, sourcePath.asString())); // Leaves - Bellows NBT
+     }
+ 
+     private static int manipulateData(
+@@ -369,7 +369,7 @@ public class DataCommands {
+     }
+ 
+     public static Tag getSingleTag(final NbtPathArgument.NbtPath path, final DataAccessor accessor) throws CommandSyntaxException {
+-        Collection<Tag> tags = path.get(accessor.getData());
++        Collection<Tag> tags = path.get(org.snowballmc.snowball.bellows.BellowsCommands.getData(accessor, path.asString())); // Leaves - Bellows NBT
+         Iterator<Tag> iterator = tags.iterator();
+         Tag result = iterator.next();
+         if (iterator.hasNext()) {
+diff --git a/net/minecraft/server/commands/data/EntityDataAccessor.java b/net/minecraft/server/commands/data/EntityDataAccessor.java
+index 335e52e61606fb1a13f984026ead10446a6f5eac..dfe664efd804f1bd0927f473c8528365ce6958cb 100644
+--- a/net/minecraft/server/commands/data/EntityDataAccessor.java
++++ b/net/minecraft/server/commands/data/EntityDataAccessor.java
+@@ -53,6 +53,19 @@ public class EntityDataAccessor implements DataAccessor {
+         return NbtPredicate.getEntityTagToCompare(this.entity);
+     }
+ 
++    // Leaves start - Bellows NBT
++    /**
++     * 只序列化 {@code path} 首段顶层键对应的字段，供 {@code /data} 的读侧调用点转发。
++     *
++     * <p>判断、过滤与异常兜底都在 {@code BellowsNbt} 里，本方法保持为纯转发。
++     *
++     * @return 过滤后的 tag；返回 {@code null} 表示"走不通"，调用方必须回退到 {@link #getData()}
++     */
++    public @org.jspecify.annotations.Nullable CompoundTag bellows$getDataFiltered(final String path) {
++        return org.snowballmc.snowball.bellows.BellowsNbt.filteredSaveForPath(this.entity, path);
++    }
++    // Leaves end - Bellows NBT
++
+     @Override
+     public Component getModifiedSuccess() {
+         return Component.translatable("commands.data.entity.modified", this.entity.getDisplayName());
+diff --git a/net/minecraft/world/entity/Display.java b/net/minecraft/world/entity/Display.java
+index 3aa01e7bbf4314b4ac5b3258f545b50f3dd7929c..f16e51a5d4565f2dae5696dec651cf5f904c7806 100644
+--- a/net/minecraft/world/entity/Display.java
++++ b/net/minecraft/world/entity/Display.java
+@@ -389,6 +389,12 @@ public abstract class Display extends Entity {
+     }
+ 
+     private void updateCulling() {
++        // Leaves start - Bellows Display Culling
++        // 服务端不使用剔除矩阵，这套计算纯属浪费；只有客户端需要
++        if (!this.level().isClientSide() && org.snowballmc.snowball.LeavesConfig.performance.bellowsSkipServerCulling) {
++            return;
++        }
++        // Leaves end - Bellows Display Culling
+         float width = this.getWidth();
+         float height = this.getHeight();
+         this.noCulling = width == 0.0F || height == 0.0F;
+diff --git a/net/minecraft/world/entity/Entity.java b/net/minecraft/world/entity/Entity.java
+index 75fd8177a79d2ec5013102530d4fe84a9bc8586e..c9737c4868d8264da2aa1c75fcf5c89c1273c8ea 100644
+--- a/net/minecraft/world/entity/Entity.java
++++ b/net/minecraft/world/entity/Entity.java
+@@ -666,11 +666,25 @@ public abstract class Entity
+     }
+ 
+     public boolean addTag(final String tag) {
+-        return this.tags.add(tag); // Paper - fully limit tag size - replace set impl
++        final boolean bellows$added = this.tags.add(tag); // Paper - fully limit tag size - replace set impl
++        // Leaves start - Bellows Selector
++        if (bellows$added && org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations
++            && this.level instanceof ServerLevel bellows$level) {
++            org.snowballmc.snowball.bellows.BellowsEntityIndex.of(bellows$level.moonrise$getEntityLookup()).addTag(this, tag);
++        }
++        // Leaves end - Bellows Selector
++        return bellows$added;
+     }
+ 
+     public boolean removeTag(final String tag) {
+-        return this.tags.remove(tag);
++        final boolean bellows$removed = this.tags.remove(tag);
++        // Leaves start - Bellows Selector
++        if (bellows$removed && org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations
++            && this.level instanceof ServerLevel bellows$level) {
++            org.snowballmc.snowball.bellows.BellowsEntityIndex.of(bellows$level.moonrise$getEntityLookup()).removeTag(this, tag);
++        }
++        // Leaves end - Bellows Selector
++        return bellows$removed;
+     }
+ 
+     public void kill(final ServerLevel level) {
+@@ -2956,6 +2970,13 @@ public abstract class Entity
+                 this.customData = input.read("data", CustomData.CODEC).orElse(CustomData.EMPTY);
+                 this.tags.clear();
+                 input.read("Tags", TAG_LIST_CODEC).ifPresent(this.tags::addAll);
++                // Leaves start - Bellows Selector
++                // 标签被整体重写：此刻 this.tags 已是最终集合，直接整体重建索引条目
++                if (org.snowballmc.snowball.LeavesConfig.performance.bellowsSelectorOptimizations
++                    && this.level instanceof ServerLevel bellows$level) {
++                    org.snowballmc.snowball.bellows.BellowsEntityIndex.of(bellows$level.moonrise$getEntityLookup()).resync(this);
++                }
++                // Leaves end - Bellows Selector
+                 input.getString("Team").ifPresent(teamName -> {
+                     Scoreboard scoreboard = this.level().getScoreboard();
+                     PlayerTeam team = scoreboard.getPlayerTeam(teamName);

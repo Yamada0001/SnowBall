@@ -44,13 +44,15 @@ subprojects {
     }
 
 
-    extensions.configure<PublishingExtension> {
-        repositories {
-            maven("https://repo.leavesmc.org/snapshots") {
-                name = "leaves"
-                credentials(PasswordCredentials::class) {
-                    username = System.getenv("LEAVES_USERNAME")
-                    password = System.getenv("LEAVES_PASSWORD")
+    providers.gradleProperty("snowballMavenUrl").orNull?.let { repositoryUrl ->
+        extensions.configure<PublishingExtension> {
+            repositories {
+                maven(repositoryUrl) {
+                    name = "snowball"
+                    credentials(PasswordCredentials::class) {
+                        username = System.getenv("SNOWBALL_MAVEN_USERNAME")
+                        password = System.getenv("SNOWBALL_MAVEN_PASSWORD")
+                    }
                 }
             }
         }
@@ -63,18 +65,18 @@ paperweight {
 
         patchFile {
             path = "paper-server/build.gradle.kts"
-            outputFile = file("leaves-server/build.gradle.kts")
-            patchFile = file("leaves-server/build.gradle.kts.patch")
+            outputFile = file("snowball-server/build.gradle.kts")
+            patchFile = file("snowball-server/build.gradle.kts.patch")
         }
         patchFile {
             path = "paper-api/build.gradle.kts"
-            outputFile = file("leaves-api/build.gradle.kts")
-            patchFile = file("leaves-api/build.gradle.kts.patch")
+            outputFile = file("snowball-api/build.gradle.kts")
+            patchFile = file("snowball-api/build.gradle.kts.patch")
         }
         patchDir("paperApi") {
             upstreamPath = "paper-api"
             excludes = setOf("build.gradle.kts")
-            patchesDir = file("leaves-api/paper-patches")
+            patchesDir = file("snowball-api/paper-patches")
             outputDir = file("paper-api")
         }
     }
@@ -83,13 +85,13 @@ paperweight {
 val patchTasks = listOf(
     "::applyPaperApiPatches" to "::rebuildPaperApiPatches",
     "::applyPaperSingleFilePatches" to "::rebuildPaperSingleFilePatches",
-    ":leaves-server:applyMinecraftPatches" to ":leaves-server:rebuildMinecraftPatches",
-    ":leaves-server:applyPaperServerPatches" to ":leaves-server:rebuildPaperServerPatches"
+    ":snowball-server:applyMinecraftPatches" to ":snowball-server:rebuildMinecraftPatches",
+    ":snowball-server:applyPaperServerPatches" to ":snowball-server:rebuildPaperServerPatches"
 )
 val patchDir = listOf(
     "paper-api",
-    "leaves-server",
-    "leaves-server/src/minecraft/java",
+    "snowball-server",
+    "snowball-server/src/minecraft/java",
     "paper-server",
 )
 

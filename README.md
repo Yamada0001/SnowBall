@@ -1,63 +1,37 @@
-Leaves 
-===========
-
-[![Leaves CI](https://github.com/LeavesMC/Leaves/actions/workflows/build.yml/badge.svg)](https://github.com/LeavesMC/Leaves/actions/workflows/leaves.yml)
-[![Leaves Download](https://img.shields.io/github/downloads/LeavesMC/Leaves/total?color=0&logo=github)](https://github.com/LeavesMC/Leaves/releases/latest)
-[![Discord](https://badgen.net/discord/online-members/5hgtU72w33?icon=discord&label=Discord&list=what)](https://discord.gg/5hgtU72w33)
-[![QQ](https://img.shields.io/badge/QQ_Unofficial-815857713-blue)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=nisbmnCFeEJCcYWBQ10th4Fu99XWklH4&authKey=8VlUxSdrFCIwmIpxFQIGR8%2BXvIQ2II%2Bx2JfxuQ8amr9UKgINh%2BdXjudQfc%2FIeTO5&noverify=0&group_code=815857713)
+# SnowBall
 
 **English** | [中文](README_cn.md)
 
-> Fork of [Paper](https://github.com/PaperMC/Paper) aims at repairing broken vanilla properties.
+SnowBall is a Minecraft Java Edition server based on [Leaves](https://github.com/LeavesMC/Leaves) and [Paper](https://github.com/PaperMC/Paper). It carries forward vanilla-mechanics fixes, fake players, and optional optimizations. Current game version: **26.3**. The exact Paper source revision is pinned in [gradle.properties](gradle.properties).
 
-> You can see what we modify and fix at [here](https://docs.leavesmc.org/en/leaves/reference/configuration)
+## Build and run
 
-## How To (Server Admins)
-Leaves use the same leavesclip(paperclip fork) jar system that Paper uses.
+Install JDK 25 and use the Gradle wrapper. Run these commands from the repository root:
 
-You can download the latest build (1.21.x) of Leaves by going [here](https://github.com/LeavesMC/Leaves/releases/latest)
+```bash
+./gradlew applyAllPatches
+./gradlew :snowball-server:createLeavesclipJar --rerun
+bash scripts/GetReleaseInfo.sh --artifact-path
+```
 
-You can also [build it yourself](#building).
+On Windows, you can use `gradlew.bat` in place of `./gradlew`; run the last command in Git Bash or check `snowball-server/build/libs` directly. The runnable distribution is `SnowBall-{Minecraft version}-{Git short SHA}.jar`. For example, a build at commit `2c62d77` for Minecraft 26.3 is named `SnowBall-26.3-2c62d77.jar`. A build from an uncommitted working tree is stamped with the current HEAD, not a new commit.
 
-You can visit our [documentation](https://docs.leavesmc.org/leaves/guides/getting-started) for more information.
+Download published builds from this repository's Releases tab. Start the distribution with `java -jar SnowBall-26.3-2c62d77.jar --nogui`, substituting your actual file name.
 
-## How To (Plugin developers)
-Leaves-API:
-```kotlin
-maven {
-    name = "leavesmc-repo"
-    url = "https://repo.leavesmc.org/snapshots/"
-}
+Back up the server before upgrading. Existing settings remain in `config/leaves.yml` and `config/SnowBall.yml`; keep both files. The `/leaves` command remains available for compatibility. Older server jars that only accept the previous release asset name need a manual first upgrade to a SnowBall jar.
 
-dependencies {
-    compileOnly("org.leavesmc.leaves:leaves-api:1.21.10-R0.1-SNAPSHOT")
-}
- ```
+## Plugin development
 
-In order to use Leaves as a dependency you must [build it yourself](#building).
-Each time you want to update your dependency, you must re-build Leaves.
+The Gradle modules are `snowball-api` and `snowball-server`. If your plugin uses only Bukkit or Paper APIs, its imports do not change. If it uses the fork's old extension API, update its imports to `org.snowballmc.snowball` and rebuild it against SnowBall. Legacy extension API binaries are not automatically remapped.
 
-Leaves-Server:
+To use a local copy of the API, run `./gradlew :snowball-api:publishToMavenLocal` after applying the patches. Then add `mavenLocal()` to your development repositories and use the following dependency, matching the version in [gradle.properties](gradle.properties):
+
 ```kotlin
 dependencies {
-    compileOnly("org.leavesmc.leaves:leaves:1.21.10-R0.1-SNAPSHOT")
+    compileOnly("org.snowballmc.snowball:snowball-api:26.3-R0.1-SNAPSHOT")
 }
- ```
+```
 
-## Building
+The Maven version naming convention does not determine the upstream Paper release channel. Releases are distributed via GitHub; remote Maven publishing is opt-in via `snowballMavenUrl` and the `SNOWBALL_MAVEN_USERNAME` and `SNOWBALL_MAVEN_PASSWORD` environment variables.
 
-You need JDK 21 and good Internet conditions
-
-Clone this repo, run `./gradlew applyAllPatches`, then run `./gradlew createMojmapLeavesclipJar` in your terminal.  
-
-You can find the jars in the `leaves-server/build/libs` directory.
-
-## Pull Requests
-
-See [Contributing](docs/CONTRIBUTING.md)
-
-## Special Thanks To:
-
-[<img src="https://user-images.githubusercontent.com/21148213/121807008-8ffc6700-cc52-11eb-96a7-2f6f260f8fda.png" alt="" width="150">](https://www.jetbrains.com)
-
-[JetBrains](https://www.jetbrains.com/), creators of the IntelliJ IDEA, supports Leaves with one of their [Open Source Licenses](https://www.jetbrains.com/opensource/). Leaves recommend using IntelliJ IDEA as your IDE.
+Run `./gradlew :snowball-api:test :snowball-server:test` to verify your changes. See [Contributing](docs/CONTRIBUTING.md) for the patch workflow and [LICENSE](LICENSE.md) for licensing and upstream attribution.

@@ -1,0 +1,155 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 11:00:00 +0800
+Subject: [PATCH] FerriteCore blockstate and component memory
+
+FerriteCore contributes two allocation reductions that still apply to this tree,
+reworked so that nothing depends on mixin accessors, reflection, or on writing
+`final` fields after the values were already published.
+
+1. Block state cache deduplication. Every `BlockBehaviour.Cache` used to hold
+   its own `collisionShape` (usually an `ArrayVoxelShape`) plus a freshly
+   allocated `boolean[12]` for `faceSturdy`. Both are now normalised inside the
+   `Cache` constructor, before they reach their `final` fields, so block states
+   with equivalent geometry share a single instance. Only `ArrayVoxelShape` is
+   considered; `CubeVoxelShape` and `SliceShape` pass through untouched. The
+   containers are guarded by `synchronized` because `Blocks.<clinit>` builds
+   caches from several threads. Upstream's `replaceInternals` step is
+   deliberately not ported: Paper's Moonrise derives and caches fourteen fields
+   at the end of every concrete `VoxelShape` constructor, so rewriting the
+   coordinate arrays afterwards would leave stale cached data behind.
+
+2. Empty data component patch singleton. A `PatchedDataComponentMap` that ends
+   up without overrides keeps an empty `Reference2ObjectArrayMap` alive; it is
+   handed back to the immutable empty map instead. This is mutually exclusive
+   with `performance.sleeping-block-entity`, which keys off the `copyOnWrite`
+   epoch transitions the shrink would introduce.
+
+Both parts are off by default (`performance.ferrite-blockstate-dedup` and
+`performance.ferrite-component-patch-shrink`); with the options disabled the
+original expressions are evaluated unchanged.
+
+This patch is Powered by FerriteCore(https://github.com/malte0811/FerriteCore)
+
+This patch is based on the following mixins:
+* "malte0811/ferritecore/mixin/blockstatecache/BlockStateCacheMixin.java"
+* "malte0811/ferritecore/mixin/datacomponents/PatchedDataComponentMapMixin.java"
+By: malte0811
+As part of: FerriteCore (https://github.com/malte0811/FerriteCore)
+Licensed under: MIT (https://github.com/malte0811/FerriteCore/blob/master/LICENSE)
+
+Modules of the mod that are not ported: neighbour table compaction and property
+table compaction (already superseded by Paper's `ZeroCollidingReferenceStateTable`
+and by `StateHolder#moonrise$init`, which drops the tables at the end of
+registration), and the threading detector rewrite (the `PalettedContainer` field
+it targeted no longer exists in this tree).
+
+diff --git a/net/minecraft/core/component/PatchedDataComponentMap.java b/net/minecraft/core/component/PatchedDataComponentMap.java
+index e33160945fefd7bc7fb0ea44104b2dfe2f43a3d3..b8dafb2920b717d429589d1470fcb6b91faff029 100644
+--- a/net/minecraft/core/component/PatchedDataComponentMap.java
++++ b/net/minecraft/core/component/PatchedDataComponentMap.java
+@@ -54,6 +54,25 @@ public final class PatchedDataComponentMap implements DataComponentMap, org.leav
+         return true;
+     }
+ 
++    // Leaves start - FerriteCore component patch shrink
++    /**
++     * Replaces an emptied patch with the immutable singleton, so objects that never keep a non-default component stop
++     * holding on to an (empty) {@code Reference2ObjectArrayMap}. The {@code copyOnWrite} flag is restored alongside it,
++     * keeping the invariant "immutable empty patch implies copyOnWrite" intact.
++     *
++     * <p>Deliberately inert while Lithium's sleeping block entity tracking is enabled: that feature keys off
++     * {@code copyOnWrite} epochs, and the extra epochs introduced here would wake sleeping block entities needlessly.</p>
++     */
++    private void ferriteShrinkIfEmpty() {
++        if (org.snowballmc.snowball.LeavesConfig.performance.ferriteComponentPatchShrink
++            && !org.snowballmc.snowball.LeavesConfig.performance.sleepingBlockEntity
++            && this.patch.isEmpty()) {
++            this.patch = Reference2ObjectMaps.emptyMap();
++            this.copyOnWrite = true;
++        }
++    }
++    // Leaves end - FerriteCore component patch shrink
++
+     @Override
+     public <T> @Nullable T get(final DataComponentType<? extends T> type) {
+         return DataComponentPatch.getFromPatchAndPrototype(this.patch, this.prototype, type);
+@@ -72,6 +91,7 @@ public final class PatchedDataComponentMap implements DataComponentMap, org.leav
+         } else {
+             lastValue = this.patch.put(type, Removed.nullToRemoved(value));
+         }
++        this.ferriteShrinkIfEmpty(); // Leaves - FerriteCore component patch shrink
+ 
+         return lastValue != null ? Objects.requireNonNullElse((T)Removed.removedToNull(lastValue), defaultValue) : defaultValue;
+     }
+@@ -89,6 +109,7 @@ public final class PatchedDataComponentMap implements DataComponentMap, org.leav
+         } else {
+             lastValue = this.patch.remove(type);
+         }
++        this.ferriteShrinkIfEmpty(); // Leaves - FerriteCore component patch shrink
+ 
+         return (T)(lastValue != null ? Removed.removedToNull(lastValue) : defaultValue);
+     }
+@@ -99,6 +120,7 @@ public final class PatchedDataComponentMap implements DataComponentMap, org.leav
+         for (Entry<DataComponentType<?>, Object> entry : Reference2ObjectMaps.fastIterable(patch.map)) {
+             this.applyPatch(entry.getKey(), entry.getValue());
+         }
++        this.ferriteShrinkIfEmpty(); // Leaves - FerriteCore component patch shrink
+     }
+ 
+     private void applyPatch(final DataComponentType<?> type, final Object value) {
+@@ -120,11 +142,13 @@ public final class PatchedDataComponentMap implements DataComponentMap, org.leav
+         this.ensureMapOwnership();
+         this.patch.clear();
+         this.patch.putAll(patch.map);
++        this.ferriteShrinkIfEmpty(); // Leaves - FerriteCore component patch shrink
+     }
+ 
+     public void clearPatch() {
+         this.ensureMapOwnership();
+         this.patch.clear();
++        this.ferriteShrinkIfEmpty(); // Leaves - FerriteCore component patch shrink
+     }
+ 
+     public void setAll(final DataComponentMap components) {
+diff --git a/net/minecraft/world/level/block/state/BlockBehaviour.java b/net/minecraft/world/level/block/state/BlockBehaviour.java
+index f421060ac40b530c1cc305ca8ac4d7980930c9ad..e48186a9b77ae76f8c602d63c4d969408a248a39 100644
+--- a/net/minecraft/world/level/block/state/BlockBehaviour.java
++++ b/net/minecraft/world/level/block/state/BlockBehaviour.java
+@@ -1158,7 +1158,13 @@ public abstract class BlockBehaviour implements FeatureElement, org.leavesmc.lea
+ 
+             private Cache(final BlockState state) {
+                 Block block = state.getBlock();
+-                this.collisionShape = block.getCollisionShape(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
++                // Leaves start - FerriteCore blockstate dedup
++                VoxelShape rawCollisionShape = block.getCollisionShape(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO, CollisionContext.empty());
++                if (org.snowballmc.snowball.LeavesConfig.performance.ferriteBlockstateDedup) {
++                    rawCollisionShape = org.snowballmc.snowball.ferritecore.BlockStateCacheImpl.canonicalCollisionShape(rawCollisionShape);
++                }
++                this.collisionShape = rawCollisionShape;
++                // Leaves end - FerriteCore blockstate dedup
+                 if (!this.collisionShape.isEmpty() && state.hasOffsetFunction()) {
+                     throw new IllegalStateException(
+                         String.format(
+@@ -1171,13 +1177,19 @@ public abstract class BlockBehaviour implements FeatureElement, org.leavesmc.lea
+ 
+                 this.largeCollisionShape = Arrays.stream(Direction.Axis.values())
+                     .anyMatch(axis -> this.collisionShape.min(axis) < 0.0 || this.collisionShape.max(axis) > 1.0);
+-                this.faceSturdy = new boolean[DIRECTIONS.length * SUPPORT_TYPE_COUNT];
++                // Leaves start - FerriteCore blockstate dedup
++                boolean[] rawFaceSturdy = new boolean[DIRECTIONS.length * SUPPORT_TYPE_COUNT];
+ 
+                 for (Direction direction : DIRECTIONS) {
+                     for (SupportType type : SupportType.values()) {
+-                        this.faceSturdy[getFaceSupportIndex(direction, type)] = type.isSupporting(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO, direction);
++                        rawFaceSturdy[getFaceSupportIndex(direction, type)] = type.isSupporting(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO, direction);
+                     }
+                 }
++                if (org.snowballmc.snowball.LeavesConfig.performance.ferriteBlockstateDedup) {
++                    rawFaceSturdy = org.snowballmc.snowball.ferritecore.BlockStateCacheImpl.canonicalFaceSturdy(rawFaceSturdy);
++                }
++                this.faceSturdy = rawFaceSturdy;
++                // Leaves end - FerriteCore blockstate dedup
+ 
+                 this.isCollisionShapeFullBlock = Block.isShapeFullBlock(state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO));
+             }

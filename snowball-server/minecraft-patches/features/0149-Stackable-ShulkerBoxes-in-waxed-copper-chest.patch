@@ -1,0 +1,158 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: trae <noreply@example.com>
+Date: Sun, 15 Nov 2026 15:30:00 +0800
+Subject: [PATCH] Stackable ShulkerBoxes in waxed copper chest
+
+Waxed copper chests now merge shulker boxes into stacks of up to
+`modify.shulker-box.stackable-shulker-boxes`. Double chests are treated as one
+container, so a partial stack in one half is topped up from the other.
+
+Only empty shulker boxes participate by default: merging two boxes that hold
+different contents would fuse their inventories with no way to split them back
+apart. `modify.shulker-box.same-nbt-stackable` relaxes that to "identical
+contents may merge".
+
+Based on Leavesaddmore 1003-Stackable-ShulkerBoxes-in-Waxed-Copper-Chest by
+trae, ported with the author's permission and re-adapted from 1.21.11 to 26.3.
+
+diff --git a/net/minecraft/world/level/block/entity/ChestBlockEntity.java b/net/minecraft/world/level/block/entity/ChestBlockEntity.java
+index 5ebe862447ba0ab396a0f32f01e1baa44ff5182f..bf5ec6d884bae8cfec16b1bda4bb50ae18138121 100644
+--- a/net/minecraft/world/level/block/entity/ChestBlockEntity.java
++++ b/net/minecraft/world/level/block/entity/ChestBlockEntity.java
+@@ -296,4 +296,136 @@ public class ChestBlockEntity extends RandomizableContainerBlockEntity implement
+         items = inventory;
+     }
+     // Leaves end - Lithium Sleeping Block Entity
++
++    // Leaves start - stackable shulker boxes in waxed copper chest
++    @Override
++    public void setItem(final int slot, final ItemStack stack) {
++        super.setItem(slot, stack);
++        if (org.snowballmc.snowball.LeavesConfig.modify.shulkerBox.stackableShulkerBoxes > 1) {
++            this.leaves$stackShulkerBoxesInWaxedCopperChest();
++        }
++    }
++
++    private void leaves$stackShulkerBoxesInWaxedCopperChest() {
++        final Level level = this.getLevel();
++        if (level == null || level.isClientSide()) {
++            return;
++        }
++
++        final BlockState state = this.getBlockState();
++        if (!(state.getBlock() instanceof net.minecraft.world.level.block.CopperChestBlock copperChestBlock)
++                || !copperChestBlock.isWaxed()) {
++            return;
++        }
++
++        ChestBlockEntity otherChest = null;
++        if (state.getValue(ChestBlock.TYPE) != ChestType.SINGLE) {
++            final Direction connectedDirection = ChestBlock.getConnectedDirection(state);
++            final BlockEntity otherBlockEntity = level.getBlockEntity(this.worldPosition.relative(connectedDirection));
++            if (otherBlockEntity instanceof ChestBlockEntity chestBlockEntity) {
++                final BlockState otherState = chestBlockEntity.getBlockState();
++                if (otherState.getBlock() instanceof net.minecraft.world.level.block.CopperChestBlock otherCopper
++                        && otherCopper.isWaxed()) {
++                    otherChest = chestBlockEntity;
++                }
++            }
++        }
++
++        final boolean changed = leaves$stackShulkerBoxes(
++                this.getItems(),
++                otherChest == null ? null : otherChest.getItems(),
++                org.snowballmc.snowball.LeavesConfig.modify.shulkerBox.stackableShulkerBoxes
++        );
++
++        if (changed) {
++            this.setChanged();
++            if (otherChest != null) {
++                otherChest.setChanged();
++            }
++        }
++    }
++
++    /**
++     * 把同一格空间里的潜影盒按 {@code maxPerStack} 合并。双联铜箱时把两半视为一个整体，
++     * 因此一边的盒子可以补到另一边未满的堆里。
++     */
++    private static boolean leaves$stackShulkerBoxes(final NonNullList<ItemStack> first,
++                                                    final NonNullList<ItemStack> second,
++                                                    final int maxPerStack) {
++        final int firstSize = first.size();
++        final int totalSize = firstSize + (second == null ? 0 : second.size());
++        if (totalSize <= 1) {
++            return false;
++        }
++
++        boolean changed = false;
++        for (int i = 0; i < totalSize; i++) {
++            final ItemStack base = i < firstSize ? first.get(i) : second.get(i - firstSize);
++            if (!leaves$isStackableShulkerBox(base, maxPerStack)) {
++                continue;
++            }
++
++            int baseCount = base.getCount();
++            if (baseCount >= maxPerStack) {
++                continue;
++            }
++
++            for (int j = i + 1; j < totalSize && baseCount < maxPerStack; j++) {
++                final ItemStack other = j < firstSize ? first.get(j) : second.get(j - firstSize);
++                if (other.isEmpty()
++                        || !leaves$isStackableShulkerBox(other, maxPerStack)
++                        || !ItemStack.isSameItemSameComponents(base, other)) {
++                    continue;
++                }
++
++                final int move = Math.min(maxPerStack - baseCount, other.getCount());
++                if (move <= 0) {
++                    continue;
++                }
++
++                base.grow(move);
++                baseCount += move;
++                other.shrink(move);
++                changed = true;
++
++                if (other.isEmpty()) {
++                    if (j < firstSize) {
++                        first.set(j, ItemStack.EMPTY);
++                    } else {
++                        second.set(j - firstSize, ItemStack.EMPTY);
++                    }
++                }
++            }
++        }
++
++        return changed;
++    }
++
++    /**
++     * 判断某个堆是否参与合并。
++     *
++     * <p>默认只合并**空盒子**：带内容物的潜影盒即使组件相同，合并后也无法再拆回原来的两份，
++     * 等于把物品搅在一起。{@code same-nbt-stackable} 打开后才放宽到内容物也相同即可合并。</p>
++     */
++    private static boolean leaves$isStackableShulkerBox(final ItemStack stack, final int maxPerStack) {
++        if (stack.isEmpty()) {
++            return false;
++        }
++
++        if (maxPerStack <= 1
++                || !(stack.getItem() instanceof net.minecraft.world.item.BlockItem blockItem)
++                || !(blockItem.getBlock() instanceof net.minecraft.world.level.block.ShulkerBoxBlock)) {
++            return false;
++        }
++
++        if (org.snowballmc.snowball.LeavesConfig.modify.shulkerBox.sameNbtStackable) {
++            return true;
++        }
++
++        final net.minecraft.world.item.component.ItemContainerContents contents =
++                stack.getComponents().getOrDefault(net.minecraft.core.component.DataComponents.CONTAINER,
++                        net.minecraft.world.item.component.ItemContainerContents.EMPTY);
++        return contents.nonEmptyItemCopyStream().findAny().isEmpty();
++    }
++    // Leaves end - stackable shulker boxes in waxed copper chest
+ }

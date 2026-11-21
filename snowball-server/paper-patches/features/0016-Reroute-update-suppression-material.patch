@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <41898282+github-actions[bot]@users.noreply.github.com>
+Date: Sat, 21 Nov 2026 13:25:00 +0000
+Subject: [PATCH] Reroute update suppression block material for legacy plugins
+
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/legacy/MaterialRerouting.java b/src/main/java/org/bukkit/craftbukkit/legacy/MaterialRerouting.java
+--- a/src/main/java/org/bukkit/craftbukkit/legacy/MaterialRerouting.java
++++ b/src/main/java/org/bukkit/craftbukkit/legacy/MaterialRerouting.java
+@@ -281,5 +281,9 @@ public class MaterialRerouting {
+     public static Material getMaterial(PlayerInteractEvent playerInteractEvent, @InjectPluginVersion ApiVersion version) {
+         return MaterialRerouting.transformFromItemType(playerInteractEvent.getMaterial(), version);
+     }
+
++    public static Material getMaterial(org.snowballmc.snowball.event.player.UpdateSuppressionEvent event, @InjectPluginVersion ApiVersion version) {
++        return MaterialRerouting.transformFromBlockType(event.getMaterial(), version);
++    }
++
+     public static Material getMaterial(PlayerStatisticIncrementEvent playerStatisticIncrementEvent, @InjectPluginVersion ApiVersion version) {

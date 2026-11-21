@@ -1,0 +1,22 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: violetc <58360096+s-yh-china@users.noreply.github.com>
+Date: Sat, 25 Jun 2022 18:04:35 +0800
+Subject: [PATCH] Spectator dont get Advancement
+
+
+diff --git a/net/minecraft/server/PlayerAdvancements.java b/net/minecraft/server/PlayerAdvancements.java
+index bb5052f1b6aecb1c39306ee60983b309bc336c74..237e33bfa572be251c56cffa121b71c5a04f8dfc 100644
+--- a/net/minecraft/server/PlayerAdvancements.java
++++ b/net/minecraft/server/PlayerAdvancements.java
+@@ -172,6 +172,11 @@ public class PlayerAdvancements {
+             return false;
+         }
+         // Leaves end - bot can't get advancement
++        // Leaves start - spectator don't get advancement
++        if (org.snowballmc.snowball.LeavesConfig.modify.spectatorDontGetAdvancement && player.gameMode.getGameModeForPlayer() == net.minecraft.world.level.GameType.SPECTATOR) {
++            return false;
++        }
++        // Leaves end - spectator don't get advancement
+         boolean result = false;
+         AdvancementProgress progress = this.getOrStartProgress(holder);
+         boolean wasDone = progress.isDone();

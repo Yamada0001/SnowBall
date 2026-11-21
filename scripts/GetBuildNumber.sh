@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-prop() {
-  grep "^[[:space:]]*${1}[[:space:]]*=" gradle.properties | grep -v "^[[:space:]]*#" | cut -d'=' -f2 | sed 's/\r//'
-}
-
-latest_build=$(curl -s -L "https://api.leavesmc.org/v2/projects/leaves/versions/$(prop mcVersion)/latestGroupBuildId")
-
-if [[ $latest_build =~ ^[0-9]+$ ]]; then
-    echo "BUILD_NUMBER=$((latest_build + 1))" >> "$GITHUB_ENV"
-else
-    echo "Error: Received non-integer value from API: $latest_build"
+: "${GITHUB_ENV:?GitHub Actions environment file is required}"
+: "${GITHUB_RUN_NUMBER:?GitHub Actions run number is required}"
+if [[ ! $GITHUB_RUN_NUMBER =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Invalid GitHub Actions run number.\n' >&2
     exit 1
 fi
+
+printf 'BUILD_NUMBER=%s\n' "$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"

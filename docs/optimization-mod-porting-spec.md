@@ -28,10 +28,10 @@
 Leaves 使用 paperweight 的 **fork 机制**，而非简单地堆叠 diff：
 
 ```
-leaves-server/build.gradle.kts.patch     ← 改写 paper-server 的构建脚本
-leaves-server/paper-patches/features/    ← 16 个补丁，作用于 paper-server
-leaves-server/minecraft-patches/features/← 138 个补丁，作用于 net.minecraft
-leaves-api/paper-patches/                ← API 侧补丁
+snowball-server/build.gradle.kts.patch     ← 改写 paper-server 的构建脚本
+snowball-server/paper-patches/features/    ← 16 个补丁，作用于 paper-server
+snowball-server/minecraft-patches/features/← 138 个补丁，作用于 net.minecraft
+snowball-api/paper-patches/                ← API 侧补丁
 ```
 
 关键装配片段（`build.gradle.kts.patch`）：
@@ -41,7 +41,7 @@ val leaves = forks.register("leaves") {
     upstream.patchDir("paperServer") {
         upstreamPath = "paper-server"
         excludes = setOf("src/minecraft", "patches", "build.gradle.kts")
-        patchesDir = rootDirectory.dir("leaves-server/paper-patches")
+        patchesDir = rootDirectory.dir("snowball-server/paper-patches")
         outputDir = rootDirectory.dir("paper-server")
     }
 }
@@ -53,14 +53,14 @@ activeFork = leaves
 | 层 | 物理位置 | 职责 |
 |---|---|---|
 | Patch 层 | `minecraft-patches/features/NNNN-*.patch` | 只在 NMS 里**插入调用点**，不写业务逻辑 |
-| Bridge 层 | `leaves-server/src/main/java/org/leavesmc/leaves/<mod>/` | 移植过来的模组核心逻辑，**纯 Java** |
+| Bridge 层 | `snowball-server/src/main/java/org/snowballmc/snowball/<mod>/` | 移植过来的模组核心逻辑，**纯 Java** |
 | Config 层 | `LeavesConfig.PerformanceConfig` | 每个优化一个 `@GlobalConfig` 布尔开关 |
-| API 层 | `leaves-api/src/main/java/org/leavesmc/leaves/` | 仅当需要暴露给插件开发者时使用 |
+| API 层 | `snowball-api/src/main/java/org/snowballmc/snowball/` | 仅当需要暴露给插件开发者时使用 |
 
 现有 Bridge 先例（Lithium 移植的产物）：
 
 ```
-org/leavesmc/leaves/lithium/
+org/snowballmc/snowball/lithium/
 ├── api/inventory/            LithiumInventory, LithiumDefaultedList,
 │                             LithiumCooldownReceivingInventory,
 │                             LithiumTransferConditionInventory
@@ -121,12 +121,12 @@ Licensed under: LGPL-3.0 (https://www.gnu.org/licenses/lgpl-3.0.html)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  插件层（可选）  leaves-api 暴露的稳定接口                    │
+│  插件层（可选）  snowball-api 暴露的稳定接口                    │
 ├─────────────────────────────────────────────────────────────┤
 │  Config 层   LeavesConfig.PerformanceConfig                  │
 │              @GlobalConfig("xxx") boolean xxx                │
 ├─────────────────────────────────────────────────────────────┤
-│  Bridge 层   org.leavesmc.leaves.<mod>.common / .api         │
+│  Bridge 层   org.snowballmc.snowball.<mod>.common / .api         │
 │              ← 模组核心逻辑的 Java 移植，无 loader 依赖        │
 ├─────────────────────────────────────────────────────────────┤
 │  Patch 层    minecraft-patches/features/NNNN-*.patch         │
@@ -148,8 +148,8 @@ Patch 只允许三种形态：
 
 ```java
 // 形态 A：配置门控的调用转发
-if (org.leavesmc.leaves.LeavesConfig.performance.<key>) {
-    org.leavesmc.leaves.<mod>.Hook.onXxx(this, ...);   // Leaves - <主题>
+if (org.snowballmc.snowball.LeavesConfig.performance.<key>) {
+    org.snowballmc.snowball.<mod>.Hook.onXxx(this, ...);   // Leaves - <主题>
 }
 
 // 形态 B：可见性调整（替代 accessWidener）
@@ -159,7 +159,7 @@ if (org.leavesmc.leaves.LeavesConfig.performance.<key>) {
 
 // 形态 C：duck 接口（让 Bridge 反查 NMS 私有状态）
 -public class LevelChunk {
-+public class LevelChunk implements org.leavesmc.leaves.<mod>.api.ExtendedLevelChunk {
++public class LevelChunk implements org.snowballmc.snowball.<mod>.api.ExtendedLevelChunk {
 ```
 
 **定律 3：一功能一开关，且必须在 `leaves.yml` 中可独立配置。**
@@ -190,7 +190,7 @@ if (org.leavesmc.leaves.LeavesConfig.performance.<key>) {
 ### 2.4 命名与目录规范
 
 ```
-org.leavesmc.leaves.<modslug>/
+org.snowballmc.snowball.<modslug>/
 ├── api/            对外稳定接口（仅当有跨模块/插件需求时创建）
 │   └── <Domain>Access.java
 ├── common/         核心逻辑，按模组原包结构平移
@@ -280,7 +280,7 @@ org.leavesmc.leaves.<modslug>/
 | C5 | 线程池/线程模型类功能标注 `lock = true` 并在文档说明需重启 | 缺则驳回 |
 | C6 | 非布尔参数（并行度、上限值、阈值）有 `ConfigValidator` 范围校验 | 缺则驳回 |
 | C7 | 字段有注释说明与原版差异；语义变更项有启动日志提示 | 缺则驳回 |
-| C8 | `./gradlew :leaves-server:createLeavesConfig` 生成的 `leaves.yml` 中键名与默认值正确，旧配置可平滑升级 | 失败则驳回 |
+| C8 | `./gradlew :snowball-server:createLeavesConfig` 生成的 `leaves.yml` 中键名与默认值正确，旧配置可平滑升级 | 失败则驳回 |
 
 > **一票否决**：任何"合入即生效且无法关闭"的功能，无论性能收益多大，一律不进主干。
 
@@ -313,8 +313,8 @@ org.leavesmc.leaves.<modslug>/
   | `ServerLevel.setDefaultSpawnPos(BlockPos, float)` | **方法已不存在**，被 `setRespawnData(LevelData.RespawnData)` 取代 |
   | `MinecraftServer.prepareLevels(ChunkProgressListener)` | **已不存在** |
   | `Level.isSpawnChunk(int, int)` | **已不存在** |
-  | `spawnChunkRadius` 游戏规则 | 被 [GameRuleRegistryFix.java](leaves-server/src/minecraft/java/net/minecraft/util/datafix/fixes/GameRuleRegistryFix.java#L41) 显式 `remove` |
-  | 出生点 ticket 循环 | 在 [ServerLevel.java](leaves-server/src/minecraft/java/net/minecraft/server/level/ServerLevel.java#L2662-L2677) 中**被整段注释**，留有 `// TODO: 1.21.9 removed spawn chunk, should we keep this?` |
+  | `spawnChunkRadius` 游戏规则 | 被 [GameRuleRegistryFix.java](snowball-server/src/minecraft/java/net/minecraft/util/datafix/fixes/GameRuleRegistryFix.java#L41) 显式 `remove` |
+  | 出生点 ticket 循环 | 在 [ServerLevel.java](snowball-server/src/minecraft/java/net/minecraft/server/level/ServerLevel.java#L2662-L2677) 中**被整段注释**，留有 `// TODO: 1.21.9 removed spawn chunk, should we keep this?` |
   | `PrepareSpawnTask$Preparing` / `$Ready` | 存在，但只剩**登录期临时**的 `PLAYER_SPAWN` 半径 3 |
 
 - **结论**：没有可移植的东西。唯一残留的 `PLAYER_SPAWN` 半径 3 若缩到 0，会破坏玩家落地。**不移植，不新建补丁。**
@@ -333,8 +333,8 @@ org.leavesmc.leaves.<modslug>/
   | `Rabbit` 跳跃力 / MoveControl / RaidGardenGoal | ⏸ 暂缓 | MC-150224 相关修复 26.3 已包含，需逐条复核后再决定 |
   | `RabbitModel`（客户端） | ❌ 跳过 | 服务端无渲染 |
 
-- **已落地**：[leaves-server/minecraft-patches/features/0139-Fix-path-navigation-never-timing-out-when-mob-speed-is-zero.patch](leaves-server/minecraft-patches/features/0139-Fix-path-navigation-never-timing-out-when-mob-speed-is-zero.patch)
-  - **Bridge**：`org.leavesmc.leaves.pathfix.PathTimeoutFix`（纯计算，无 NMS 依赖）
+- **已落地**：[snowball-server/minecraft-patches/features/0139-Fix-path-navigation-never-timing-out-when-mob-speed-is-zero.patch](snowball-server/minecraft-patches/features/0139-Fix-path-navigation-never-timing-out-when-mob-speed-is-zero.patch)
+  - **Bridge**：`org.snowballmc.snowball.pathfix.PathTimeoutFix`（纯计算，无 NMS 依赖）
     - `DEFAULT_NODE_TIMEOUT = 200.0`（零速兜底）
     - `MAX_NODE_TIMEOUT = 4000.0`（近零速时 `dist/speed` 爆炸的封顶）
   - **Patch 形态 A**（配置门控转发），两处：`doStuckDetection` 的 `timeoutLimit` 计算、`resetStuckTimeout`
@@ -346,7 +346,7 @@ org.leavesmc.leaves.<modslug>/
 
 - **许可**：MIT ｜ **Mixin**：6（5 类 + 1 Accessor）｜ **MC**：26.3 ｜ 纯服务端 worldgen
 - **机制**：以 `BoxOctree` 替换 `JigsawPlacement.lambda$addPieces$2` 里 `Shapes.join` 的全顶点相交；配套 `TrojanVoxelShape`、`PalettedStructureBlockInfoList`。
-- **Bridge**：`org.leavesmc.leaves.structurelayout/`
+- **Bridge**：`org.snowballmc.snowball.structurelayout/`
   - `BoxOctree`、`TrojanVoxelShape`、`PalettedStructureBlockInfoList`、`ConcurrentReferenceHashMap`、`TrojanArrayList`
   - `PlatformService` 接口在模组里有 `ServiceLoader` 抽象，移植时可**直接内联**为静态方法，删掉服务发现层
 - **Patch**：`0141-Optimize-jigsaw-structure-layout.patch`
@@ -365,7 +365,7 @@ org.leavesmc.leaves.<modslug>/
   1. `selector`：`@e` 选择器结果缓存 + `EntityLookup` 适配（8 条）
   2. `nbt`：数据包/实体 NBT 局部读写与序列化剪枝（16 + 5 + 2 条）
   3. `blockforceload`：修 MC-168596（`execute if block` 导致的永久强加载）（5 条）
-- **Bridge**：`org.leavesmc.leaves.bellows/`
+- **Bridge**：`org.snowballmc.snowball.bellows/`
   - `selector/`（选择器缓存、`LevelEntityGetterAdapter` 适配）
   - `nbt/`（局部化 NBT 读写器）
 - **Patch**：`0142-Command-NBT-selector-optimizations.patch`
@@ -387,7 +387,7 @@ org.leavesmc.leaves.<modslug>/
 - **许可**：MIT ｜ **Mixin**：5 ｜ **MC**：26.3 ｜ 服务端
 - **收益**：README 声称红石线 MSPT 贡献降至 1/20；红石更新顺序确定化（修 MC-11193）。
 - **机制**：抛弃原版递归更新，改为「建网 → 找外部供电源 → 从源扩散」；每根线每个 tick 最多 setBlock 一次；block update 从 42 降到 24，shape update 从 22 降到 6。
-- **Bridge**：`org.leavesmc.leaves.alternatecurrent/wire/`
+- **Bridge**：`org.snowballmc.snowball.alternatecurrent/wire/`
   - `WireHandler`、`WireNode`、`Node`、`WireConnection`、`WireConnectionManager`、`UpdateOrder`、`PriorityQueue`、`SimpleQueue`、`LevelHelper`、`Config`
   - 模组自身有 `Profiler`/`ACProfiler`/`ProfilerResults` 与 `/alternatecurrent` 命令 —— **命令与 profiler 建议不搬**（Leaves 已有 spark）
 - **Patch**：`0144-Alternate-current-redstone.patch`
@@ -402,7 +402,7 @@ org.leavesmc.leaves.<modslug>/
 
 - **许可**：GPL-3.0（可合入）｜ **Mixin**：4（`PrimedTnt`、`Entity`、`ServerLevelTick`、`ClientLevel`）｜ **MC**：26.3/26.4
 - **机制**：把原版 1352 条射线采样替换为**方块网格上的 blast field**：每方块最多访问一次，按"离中心更近的邻居留下的能量 − 自身抗爆值"传播，被挡住则在后方形成阴影。同一 tick 相邻爆炸合并；TNT 穿过空区块段时跳过碰撞检测。
-- **Bridge**：`org.leavesmc.leaves.oushii/`
+- **Bridge**：`org.snowballmc.snowball.oushii/`
   - `ExplosionEngine`（能量场求解）、`BlastField`、`BlockResistanceCache`（按 blockstate 缓存一次）、`ChunkSectionReader`
 - **Patch**：`0145-Oushii-explosion-engine.patch`
   - `PrimedTnt#tick`（只接管原版 `PrimedTnt`，不碰其子类——这是模组刻意的兼容设计，必须保留）
@@ -429,7 +429,7 @@ org.leavesmc.leaves.<modslug>/
 | ⑤ 线程检测器 byte 化 | `PalettedContainer` 的 `ThreadingDetector` | ✅ 移植 | 低风险 |
 | — 模型/资源加载 | **本分支不存在** | — | 无需处理 |
 
-- **Bridge**：`org.leavesmc.leaves.ferritecore/`
+- **Bridge**：`org.snowballmc.snowball.ferritecore/`
   - `BlockStateCacheImpl`、`FastMap`、`ThreadingDetectorInternals`
   - **删掉** `PlatformHooks` 对 Fabric `MappingResolver` 的依赖（`FerriteCore/PlatformHooks.java:8-20`），字段名在 Leaves 里是编译期已知的
 - **Patch**：`0146-FerriteCore-blockstate-memory.patch`
@@ -443,7 +443,7 @@ org.leavesmc.leaves.<modslug>/
 
 - **许可**：GPL-3.0 ｜ **Mixin**：5 有效（另有 4 个空壳）｜ **MC**：26.1（声明支持 26.1–26.3）
 - **机制**：用自研 `RailLogic`/`RailSignalSearcher`/`RailPath`/`RailLaneUpdater`（约 2000 行）替换 `PoweredRailBlock#updateState` 的 BFS 搜索与递归更新；`RailSearchCache` 为开放寻址 long→int 缓存，容量随 `railPowerLimit`（上限 1024）。
-- **Bridge**：`org.leavesmc.leaves.railoptimization/`（整个 `RailLogic` 家族平移）
+- **Bridge**：`org.snowballmc.snowball.railoptimization/`（整个 `RailLogic` 家族平移）
 - **Patch**：`0142-Optimize-powered-rail-updates.patch`（已落地）
   - `PoweredRailBlock#updateState`（`@WrapMethod` → 前置调用 `RailLogic.tryCustomUpdateState`，false 则回落原版）
   - `BaseRailBlock#neighborChanged` 的 `shouldBeRemoved`
@@ -463,7 +463,7 @@ org.leavesmc.leaves.<modslug>/
 - **机制**：`InventoryChangeTrigger#trigger` 里的三条短路——采样节流（每玩家每物品 5 次变动判定一次）、堆变空、堆变小；外加 `AbstractContainerMenu#addSlot` 用容器现有物品初始化 `lastSlots`，避免开箱刷屏。
 - **未移植的 3 项**：多谓词短路、堆叠阈值门、`count` 前置比较。它们依赖 `@Local` 捕获一个在重度补丁方法内部构造的列表，以及一个资源重载监听器，做成源码补丁太脆。
 - **配置**：`cerulean-skip-ticks`、`cerulean-ignore-emptied-stacks`、`cerulean-ignore-decreased-stacks`、`cerulean-init-last-slots`，**全部默认 `false`**（前三项会跳过原本执行的条件判定）。
-- **Bridge**：`org.leavesmc.leaves.cerulean/`（`StackSizeThresholdManager`、`ThrottleState`）
+- **Bridge**：`org.snowballmc.snowball.cerulean/`（`StackSizeThresholdManager`、`ThrottleState`）
 - **Patch**：`0148-Throttle-inventory-change-trigger.patch`
 - **配置**：`performance.throttle-advancement-trigger`（默认 `false`）
 - **注意**：
@@ -615,7 +615,7 @@ org.leavesmc.leaves.<modslug>/
 **Bridge 设计**
 
 ```
-org.leavesmc.leaves.worldthreader/
+org.snowballmc.snowball.worldthreader/
 ├── api/
 │   ├── ThreadOwnedObject.java          NMS 侧 duck 接口（leaves$getOwnerThread / swapOwner）
 │   └── ExclusiveWorldAccess.java       独占访问令牌
@@ -739,10 +739,10 @@ public boolean worldthreaderDebug = false;
 |---|---|
 | `applyAllPatches` 是唯一入口 | `applyPatches` **不存在**（任务名歧义），正确的是 `applyAllPatches` |
 | 补丁回写任务 | `rebuildMinecraftFeaturePatches`（minecraft 侧）/ `rebuildAllServerPatches` |
-| `leaves-server/` **不是** git 仓库 | `docs/CONTRIBUTING_cn.md` 说它"不是正常的 git 仓库"，实测连 `.git` 都没有。`git -C leaves-server log` 会向上找到根仓库，产生误导 |
-| 真正的补丁仓库在缓存里 | `leaves-server/.gradle/caches/paperweight/taskCache/runLeavesSetup`（每个提交 = 一个补丁） |
+| `snowball-server/` **不是** git 仓库 | `docs/CONTRIBUTING_cn.md` 说它"不是正常的 git 仓库"，实测连 `.git` 都没有。`git -C snowball-server log` 会向上找到根仓库，产生误导 |
+| 真正的补丁仓库在缓存里 | `snowball-server/.gradle/caches/paperweight/taskCache/runLeavesSetup`（每个提交 = 一个补丁） |
 | **`rebuildMinecraftFeaturePatches` 不幂等** | 实测在无实质改动时会重写 49 个补丁的 `index` 行与行号偏移（189 增 189 删，语义零变化）。**不要**用它的输出当提交内容 |
-| **推荐做法：手写补丁文件** | 直接写入 `leaves-server/minecraft-patches/features/NNNN-<Title>.patch`，再用 `applyAllPatches` 验证；不要依赖 rebuild 生成 |
+| **推荐做法：手写补丁文件** | 直接写入 `snowball-server/minecraft-patches/features/NNNN-<Title>.patch`，再用 `applyAllPatches` 验证；不要依赖 rebuild 生成 |
 
 **补丁文件四条硬性约定（缺一即失败）**
 
@@ -758,8 +758,8 @@ public boolean worldthreaderDebug = false;
 
 ```bash
 # 在补丁仓库里生成权威 diff（避免手写 hunk 出错）
-T2="leaves-server/.gradle/caches/paperweight/taskCache/runLeavesSetup"
-cp leaves-server/src/minecraft/java/<path>.java "$T2/<path>.java"
+T2="snowball-server/.gradle/caches/paperweight/taskCache/runLeavesSetup"
+cp snowball-server/src/minecraft/java/<path>.java "$T2/<path>.java"
 git -C "$T2" diff --full-index -- "<path>.java" > /tmp/body.diff
 git -C "$T2" checkout -- "<path>.java"     # 立刻还原，别留脏
 ```
@@ -770,8 +770,8 @@ git -C "$T2" checkout -- "<path>.java"     # 立刻还原，别留脏
 
 ```bash
 ./gradlew applyAllPatches                        # 补丁能否被 git am 接受
-./gradlew :leaves-server:compileJava             # 代码能否编译
-./gradlew :leaves-server:createLeavesConfig      # leaves.yml 键能否生成
+./gradlew :snowball-server:compileJava             # 代码能否编译
+./gradlew :snowball-server:createLeavesConfig      # leaves.yml 键能否生成
 ```
 
 > 注意：`applyAllPatches` 失败时**不会**打印 git 的原始报错。要定位根因，直接在
@@ -786,7 +786,7 @@ git -C "$T2" checkout -- "<path>.java"     # 立刻还原，别留脏
 | S1 | **过闸**：G1–G5 逐条判定并记录 | `移植评估表`（附在 PR 描述） | 组长签核 |
 | S2 | **映射核对**：确认模组用的是 Mojmap；若不是，先机械转换 | 转换清单 / 「无需转换」结论 | 编译通过 |
 | S3 | **剥离平台层**：删除所有 loader 入口、fabric-api 调用、`ServiceLoader`、config 库；把 accessWidener 转成 Patch 形态 B | Bridge 骨架（可编译、无 `net.fabricmc.*`） | `grep -r "net.fabricmc"` 为空 |
-| S4 | **平移核心逻辑** 到 `org.leavesmc.leaves.<slug>/common/` | 可编译的 Bridge | 单测（若有）通过 |
+| S4 | **平移核心逻辑** 到 `org.snowballmc.snowball.<slug>/common/` | 可编译的 Bridge | 单测（若有）通过 |
 | S5 | **写 Hook 入口**：把模组的每个 mixin 注入点翻译成 `Hook` 的静态方法 | `Hook.java` | 评审通过 |
 | S6 | **落 Patch**：在 NMS 对应位置插入配置门控调用 | `NNNN-*.patch` | `./gradlew applyPatches` 通过 |
 | S7 | **加配置（强制，见 §3 G6）**：`PerformanceConfig` 里为每个原子子功能加独立 `@GlobalConfig` 字段；语义变更写 Javadoc；线程模型类加 `lock = true`；带参数的加 `ConfigValidator` | 配置键 + 副作用 validator + `createLeavesConfig` 能生成 | **G6 的 C1–C8 全部通过** |
@@ -815,7 +815,7 @@ git -C "$T2" checkout -- "<path>.java"     # 立刻还原，别留脏
 ### 6.2 duck 接口（形态 C）的用法与边界
 
 ```java
-// leaves-server/src/main/java/org/leavesmc/leaves/<slug>/api/ExtendedLevelChunk.java
+// snowball-server/src/main/java/org/snowballmc/snowball/<slug>/api/ExtendedLevelChunk.java
 public interface ExtendedLevelChunk {
     long leaves$getEpoch();
 }
@@ -977,7 +977,7 @@ public class WorldthreaderValidator extends BooleanConfigValidator {
 新增 `@GlobalConfig` 字段后必须执行：
 
 ```bash
-./gradlew :leaves-server:createLeavesConfig
+./gradlew :snowball-server:createLeavesConfig
 ```
 
 逐项确认：
@@ -1084,7 +1084,7 @@ Licensed under: <SPDX> (<许可 URL>)
 
 | 阶段 | 内容 | 产出 | 工期 |
 |---|---|---|---|
-| **M0 立规范** | 落地本文档、建立 `org.leavesmc.leaves.<slug>` 骨架、确定 PR 模板与评审清单（含 G6 的 C1–C8） | 规范 + 样板目录 | 2 人日 |
+| **M0 立规范** | 落地本文档、建立 `org.snowballmc.snowball.<slug>` 骨架、确定 PR 模板与评审清单（含 G6 的 C1–C8） | 规范 + 样板目录 | 2 人日 |
 | **M1 打样板** | Ksyxis → mcm-rabbit-pathfinding-fix → StructureLayoutOptimizer | 3 个补丁 + 3 组配置键，验证 SOP 全链路 | 5–8 人日 |
 | **M2 攻坚一中** | alternate-current、Bellows、RailOptimization | 3 个大补丁 + 铁轨回归套件 | 18–21 人日 |
 | **M3 攻坚二中** | Oushii、FerriteCore（2/5 模块）、Cerulean（许可先行） | 3 个补丁 + 爆炸事件补发 | 15–19 人日 |
@@ -1107,7 +1107,7 @@ Licensed under: <SPDX> (<许可 URL>)
 3. **leavesclip 是否支持 native 资源透传** → 决定 krypton 压缩/加密与 Ferrite 子项的可行性。
 4. **Cerulean 的许可证正文** → 需上游补齐或书面授权。
 5. **`performance.cache-climb-check`、`reduce-chuck-load-and-lookup`、`optimize-noise-generation` 三个配置键无补丁引用** → 是孤立占位还是实现遗漏，需确认后再决定是否复用这些键。
-6. **worldthreader 前置**：确认 Leaves 现有代码中没有「所有世界必须在主线程 tick」的硬假设（例如某些插件 API 或 `MinecraftServer` 的同步点假设），以及 `MinecraftServer#tickChildren` 是否已被其他 Leaves 补丁改写（有则需合并冲突）。动作：`grep -rn "tickChildren" leaves-server/` 并检查 `paperServer` 展开后的源码。
+6. **worldthreader 前置**：确认 Leaves 现有代码中没有「所有世界必须在主线程 tick」的硬假设（例如某些插件 API 或 `MinecraftServer` 的同步点假设），以及 `MinecraftServer#tickChildren` 是否已被其他 Leaves 补丁改写（有则需合并冲突）。动作：`grep -rn "tickChildren" snowball-server/` 并检查 `paperServer` 展开后的源码。
 
 ---
 

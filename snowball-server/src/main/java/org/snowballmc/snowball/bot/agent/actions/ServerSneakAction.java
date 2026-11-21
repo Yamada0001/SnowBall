@@ -1,0 +1,35 @@
+package org.snowballmc.snowball.bot.agent.actions;
+
+import org.jetbrains.annotations.NotNull;
+import org.snowballmc.snowball.bot.ServerBot;
+import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
+import org.snowballmc.snowball.entity.bot.actions.CraftSneakAction;
+import org.snowballmc.snowball.event.bot.BotActionStopEvent;
+
+public class ServerSneakAction extends AbstractStateBotAction<ServerSneakAction> {
+
+    public ServerSneakAction() {
+        super("sneak");
+    }
+
+    @Override
+    public boolean doTick(@NotNull ServerBot bot) {
+        if (bot.isShiftKeyDown()) {
+            return false;
+        }
+
+        bot.setShiftKeyDown(true);
+        return true;
+    }
+
+    @Override
+    public void stop(@NotNull ServerBot bot, BotActionStopEvent.Reason reason) {
+        super.stop(bot, reason);
+        bot.setShiftKeyDown(false);
+    }
+
+    @Override
+    public CraftBotAction<?, ServerSneakAction> asCraft() {
+        return new CraftSneakAction(this);
+    }
+}

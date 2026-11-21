@@ -1,7 +1,7 @@
-Contributing to Leaves
+为 SnowBall 贡献代码
 ===========
 
-[English](https://github.com/LeavesMC/Leaves/blob/master/docs/CONTRIBUTING.md) | **中文**
+[English](CONTRIBUTING.md) | **中文**
 
 我们很开心您想为我们的项目做出贡献！一般来说，我们对PR的审核是十分宽松的；
 但是如果您可以遵守下列的规则，我们可以更快地完成审核。
@@ -21,8 +21,7 @@ Contributing to Leaves
 在开始开发之前，您首先需要拥有以下软件作为开发环境：
 
 - `git`
-- `JDK 21 或更高版本`
-  - 我们使用了 Gradle 的工具链，这让你可以使用 JRE 8 就进行构建。(Gradle 在找不到 JDK 21 时会自动下载)
+- JDK 25（使用项目的 Gradle Wrapper）。
 
 如果你使用 Windows 系统进行开发，那么你可以使用 `WSL` 来加速构建。
 
@@ -30,8 +29,8 @@ Contributing to Leaves
 
 Leaves 使用和 Paper 一样的补丁系统，并为了针对不同部分的修改分成了两个目录：
 
-- `leaves-api` - 对 `Paper-API` / `Spigot-API` / `Bukkit` 进行的修改。
-- `leaves-server` - 对 `Paper`/ `Spigot` / `CraftBukkit` 进行的修改。
+- `snowball-api` - 对 `Paper-API` / `Spigot-API` / `Bukkit` 进行的修改。
+- `snowball-server` - 对 `Paper`/ `Spigot` / `CraftBukkit` 进行的修改。
 
 补丁系统是基于 git 的，你可以在这里了解 git 的基本内容: <https://git-scm.com/docs/gittutorial>
 
@@ -39,9 +38,9 @@ Leaves 使用和 Paper 一样的补丁系统，并为了针对不同部分的修
 
 1. 将你的仓库 clone 到本地；
 2. 在你的 IDE 或 终端 内执行 Gradle 的 `applyAllPatches` 任务，如果是在终端内，你可以执行 `./gradlew applyAllPatches`；
-3. 进入 `leaves-api` 或 `leaves-server` 文件夹进行修改。
+3. 进入 `snowball-api` 或 `snowball-server` 文件夹进行修改。
 
-By the way，`leaves-api` 和 `leaves-server` 并不是正常的 git 仓库。
+By the way，`snowball-api` 和 `snowball-server` 并不是正常的 git 仓库。
 
 - 在应用补丁前，基点将会指向未被更改的源码
 - 在基点后的每一个提交都是一个补丁
@@ -51,7 +50,7 @@ By the way，`leaves-api` 和 `leaves-server` 并不是正常的 git 仓库。
 
 按照以下步骤增加一个补丁是非常简单的：
 
-1. 对 `leaves-api` 或者 / 和 `leaves-server` 进行修改；
+1. 对 `snowball-api` 或者 / 和 `snowball-server` 进行修改；
 2. 使用 git 添加你的修改，比如 `git add .`；
 3. 使用 `git commit -m <提交信息>` 进行提交；
 4. 运行 Gradle 任务 `rebuildAllServerPatches` 将你的提交转化为一个补丁；

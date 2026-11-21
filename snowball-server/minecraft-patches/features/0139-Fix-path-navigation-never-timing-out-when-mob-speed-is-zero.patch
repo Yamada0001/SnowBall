@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: LeavesMC <noreply@leavesmc.org>
+Date: Sun, 15 Nov 2026 10:00:00 +0800
+Subject: [PATCH] Fix path navigation never timing out when mob speed is zero
+
+Vanilla `PathNavigation#doStuckDetection` computes `timeoutLimit` as
+`speed > 0 ? dist / speed * 20 : 0.0`. The subsequent timeout check is
+guarded by `timeoutLimit > 0.0`, so when a mob's movement speed is zero
+the node timeout never fires and the mob waits on that node forever.
+`resetStuckTimeout` also resets `timeoutLimit` back to `0.0`, which has
+the same effect after any timeout.
+
+This patch makes the limit always positive when the fix is enabled:
+a fixed 200-tick fallback for zero speed, and a 4000-tick ceiling for
+the near-zero-speed case where `dist / speed` explodes.
+
+Behaviour is gated behind `performance.path-navigation-timeout-fix`,
+which is `true` by default. With the option disabled the original
+expression is evaluated verbatim, so behaviour is bit-for-bit vanilla.
+
+This patch is Powered by mcm-rabbit-pathfinding-fix
+(https://github.com/litetex-oss/mcm-rabbit-pathfinding-fix)
+
+This patch is based on the following mixins:
+* "net/litetex/rpf/mixin/EntityNavigationMixin.java"
+By: litetex
+As part of: mcm-rabbit-pathfinding-fix (https://github.com/litetex-oss/mcm-rabbit-pathfinding-fix)
+Licensed under: Apache-2.0 (https://www.apache.org/licenses/LICENSE-2.0)
+
+Only the node-timeout half of the mod is ported: upstream Minecraft 26.3
+already replaced the stuck-distance heuristic (`effectiveSpeed` clamp) that
+the mod used to rewrite, so that half is no longer applicable.
+
+diff --git a/net/minecraft/world/entity/ai/navigation/PathNavigation.java b/net/minecraft/world/entity/ai/navigation/PathNavigation.java
+index f042ddf76f3a39c389e099f09dd5cb07483d2046..d52f3bb71bd4ea2dde6ce480f4909aefd9378b98 100644
+--- a/net/minecraft/world/entity/ai/navigation/PathNavigation.java
++++ b/net/minecraft/world/entity/ai/navigation/PathNavigation.java
+@@ -28,6 +28,8 @@ import net.minecraft.world.level.pathfinder.PathType;
+ import net.minecraft.world.level.pathfinder.WalkNodeEvaluator;
+ import net.minecraft.world.phys.HitResult;
+ import net.minecraft.world.phys.Vec3;
++import org.snowballmc.snowball.LeavesConfig; // Leaves - Path navigation timeout fix
++import org.snowballmc.snowball.pathfix.PathTimeoutFix; // Leaves - Path navigation timeout fix
+ import org.jspecify.annotations.Nullable;
+ 
+ public abstract class PathNavigation {
+@@ -370,7 +372,13 @@ public abstract class PathNavigation {
+             } else {
+                 this.timeoutCachedNode = pos;
+                 double distToNode = mobPos.distanceTo(Vec3.atBottomCenterOf(this.timeoutCachedNode));
+-                this.timeoutLimit = this.mob.getSpeed() > 0.0F ? distToNode / this.mob.getSpeed() * 20.0 : 0.0;
++                // Leaves start - Path navigation timeout fix
++                // 原版在速度为 0 时把上下限置为 0，配合下方的 `timeoutLimit > 0.0` 前置判断，
++                // 使得该情况下的节点永远不会超时，寻路会无限等待。
++                this.timeoutLimit = LeavesConfig.performance.pathNavigationTimeoutFix
++                    ? PathTimeoutFix.timeoutLimit(distToNode, this.mob.getSpeed())
++                    : (this.mob.getSpeed() > 0.0F ? distToNode / this.mob.getSpeed() * 20.0 : 0.0);
++                // Leaves end - Path navigation timeout fix
+             }
+ 
+             if (this.timeoutLimit > 0.0 && this.timeoutTimer > this.timeoutLimit * 3.0) {
+@@ -389,7 +397,7 @@ public abstract class PathNavigation {
+     private void resetStuckTimeout() {
+         this.timeoutCachedNode = Vec3i.ZERO;
+         this.timeoutTimer = 0L;
+-        this.timeoutLimit = 0.0;
++        this.timeoutLimit = LeavesConfig.performance.pathNavigationTimeoutFix ? PathTimeoutFix.resetTimeoutLimit() : 0.0; // Leaves - Path navigation timeout fix
+         this.isStuck = false;
+     }
+ 

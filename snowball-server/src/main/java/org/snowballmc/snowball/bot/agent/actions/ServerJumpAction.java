@@ -1,0 +1,28 @@
+package org.snowballmc.snowball.bot.agent.actions;
+
+import org.jetbrains.annotations.NotNull;
+import org.snowballmc.snowball.bot.ServerBot;
+import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
+import org.snowballmc.snowball.entity.bot.actions.CraftJumpAction;
+
+public class ServerJumpAction extends AbstractTimerBotAction<ServerJumpAction> {
+
+    public ServerJumpAction() {
+        super("jump");
+    }
+
+    @Override
+    public boolean doTick(@NotNull ServerBot bot) {
+        if (!bot.onGround()) {
+            return false;
+        } else {
+            bot.jumpFromGround();
+        }
+        return true;
+    }
+
+    @Override
+    public CraftBotAction<?, ServerJumpAction> asCraft() {
+        return new CraftJumpAction(this);
+    }
+}

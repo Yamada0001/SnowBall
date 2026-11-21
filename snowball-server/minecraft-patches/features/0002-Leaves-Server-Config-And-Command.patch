@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: violetc <58360096+s-yh-china@users.noreply.github.com>
+Date: Sat, 1 Feb 2025 14:21:05 +0800
+Subject: [PATCH] Leaves Server Config And Command
+
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+index 211e78b603ab3c572abfa7f8a5785606550b4b0e..8515b302ea57f5ef197edcda3223c586c14b60d2 100644
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -2302,6 +2302,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTa
+             )
+             .thenAcceptAsync(newResources -> {
+                 io.papermc.paper.command.brigadier.PaperBrigadier.moveBukkitCommands(this.resources.managers().getCommands(), newResources.managers().getCommands()); // Paper
++                org.snowballmc.snowball.command.RootNode.reloadLeavesCommands(); // Leaves - command
+                 this.resources.close();
+                 this.resources = newResources;
+                 this.packRepository.setSelected(packsToEnable, false); // Paper - add pendingReload flag to determine required pack loading - false as this is *after* a reload (see above)
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+index 68675926ee85f738b3693a76fc29b80b80c717ed..2453556c09b9256028c63000504eb34a105124a8 100644
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -249,6 +249,9 @@ public class DedicatedServer extends MinecraftServer implements ServerInterface
+         consoleThread.start(); // Paper - Enhance console tab completions for brigadier commands; start console thread after MinecraftServer.console & PaperConfig are initialized
+         io.papermc.paper.command.PaperCommands.registerCommands(this); // Paper - setup /paper command
+         this.server.spark.registerCommandBeforePlugins(this.server); // Paper - spark
++
++        org.snowballmc.snowball.LeavesConfig.init((java.io.File) options.valueOf("leaves-settings")); // Leaves - Server Config
++
+         com.destroystokyo.paper.Metrics.PaperMetrics.startMetrics(); // Paper - start metrics
+         com.destroystokyo.paper.VersionHistoryManager.INSTANCE.getClass(); // Paper - load version history now
+ 
