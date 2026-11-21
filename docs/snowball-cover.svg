@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 360" width="840" height="360" role="img" aria-labelledby="title desc">
+  <title id="title">SnowBall winter cover</title>
+  <desc id="desc">A Christmas tree and snowman in a snowy clearing. An illustrative tick rate rises from 5 to 20 TPS, shifting from red through orange to green.</desc>
+  <style>
+    .tick { opacity: 0; }
+    .last { opacity: 1; }
+    @media (prefers-reduced-motion: no-preference) {
+      .tick { opacity: 0; animation: readout .45s steps(1, end) forwards; animation-delay: calc(var(--i) * .45s); }
+      .last { animation-name: final-readout; }
+      .meter { transform-box: fill-box; transform-origin: left center; animation: sweep 6.75s both; }
+    }
+    @keyframes readout { from { opacity: 1; } to { opacity: 0; } }
+    @keyframes final-readout { from, to { opacity: 1; } }
+    @keyframes sweep {
+      0% { transform: scaleX(.25); fill: #e5857d; animation-timing-function: steps(7, end); }
+      46.666666667% { transform: scaleX(.6); fill: #edb378; animation-timing-function: steps(8, end); }
+      100% { transform: scaleX(1); fill: #a0c7a4; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="sky" x2="0.95" y2="1" gradientUnits="objectBoundingBox">
+      <stop stop-color="#20342b"/><stop offset="1" stop-color="#172a25"/>
+    </linearGradient>
+    <clipPath id="cover"><rect width="840" height="360" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#cover)">
+    <rect width="840" height="360" fill="url(#sky)"/>
+    <circle cx="709" cy="114" r="63" fill="#dfbb87" opacity=".19"/>
+    <path d="M420 310Q560 183 681 243T840 203V360H420Z" fill="#354f43"/>
+    <path d="M0 333Q164 289 335 323T604 300Q723 262 840 287V360H0Z" fill="#c4c9b4"/>
+    <path d="M0 355Q167 326 339 347T640 316Q757 287 840 313V360H0Z" fill="#eee5d3"/>
+    <path d="M480 71h2m37 65h2m48-43h2m89-47h2m105 176h2m30-64h2m-39-87h2m-64 112h2m-192 26h2" fill="none" stroke="#eddec2" stroke-width="3" stroke-linecap="round" opacity=".65"/>
+    <g transform="translate(608 85)">
+      <path d="M-7 176H7V215H-7Z" fill="#86573d"/>
+      <path d="M0 114L-72 194H72Z" fill="#3e6450"/>
+      <path d="M0 68L-59 154H59Z" fill="#50745a"/>
+      <path d="M0 22L-45 111H45Z" fill="#678568"/>
+      <path d="M0 0L4 9 14 13 4 17 0 26-4 17-14 13-4 9Z" fill="#f1c58b"/>
+      <path d="M-35 104Q-6 112 25 85M-48 144Q1 153 42 132M-57 181Q1 189 44 166" fill="none" stroke="#e6ba83" stroke-width="2" stroke-linecap="round"/>
+      <g fill="#efc890"><circle cx="-19" cy="79" r="3"/><circle cx="18" cy="121" r="3"/><circle cx="-24" cy="164" r="3"/></g>
+      <g fill="#bd7465"><circle cx="14" cy="68" r="4"/><circle cx="-19" cy="127" r="4"/><circle cx="29" cy="173" r="4"/></g>
+    </g>
+    <ellipse cx="734" cy="309" rx="39" ry="5" fill="#766c56" opacity=".18"/>
+    <g transform="translate(734 303)">
+      <path d="M-22-32L-47-51M-39-45l-2-10M21-33l22-16m-7 5 1-9" fill="none" stroke="#835b44" stroke-width="3" stroke-linecap="round"/>
+      <circle cy="-22" r="28" fill="#f5ecdb"/><circle cy="-62" r="21" fill="#f8f0df"/>
+      <path d="M-24-78h48v5h-48zM-15-98h30v20h-30z" fill="#2c3d34"/>
+      <path d="M-16-80h32v-5h-32zM-19-45q18 8 38-1v8q-19 7-38 0zM10-41h8v22l-8-3z" fill="#ac6256"/>
+      <path d="M2-61l15 3-15 3z" fill="#c78958"/>
+      <g fill="#38453a"><circle cx="-7" cy="-65" r="2"/><circle cx="7" cy="-65" r="2"/><circle cy="-28" r="2.3"/><circle cy="-17" r="2.3"/></g>
+    </g>
+    <g transform="translate(52 0)">
+      <text x="0" y="133" fill="#faf0dd" font-family="Georgia, serif" font-size="76" letter-spacing="-2">SnowBall</text>
+      <text x="2" y="168" fill="#e6d9be" font-family="system-ui, sans-serif" font-size="19">Minecraft Java Edition server</text>
+      <g font-family="monospace" fill="#ecdfc5">
+        <text x="2" y="226" font-size="13" letter-spacing="1.5">TICK RATE DEMO</text>
+        <text x="208" y="226" font-size="19" text-anchor="end">
+          <tspan class="tick" style="--i:0" x="208" fill="#e5857d">05</tspan>
+          <tspan class="tick" style="--i:1" x="208" fill="#e88b7c">06</tspan>
+          <tspan class="tick" style="--i:2" x="208" fill="#e9927b">07</tspan>
+          <tspan class="tick" style="--i:3" x="208" fill="#eb987a">08</tspan>
+          <tspan class="tick" style="--i:4" x="208" fill="#ec9f79">09</tspan>
+          <tspan class="tick" style="--i:5" x="208" fill="#eda779">10</tspan>
+          <tspan class="tick" style="--i:6" x="208" fill="#edac78">11</tspan>
+          <tspan class="tick" style="--i:7" x="208" fill="#edb378">12</tspan>
+          <tspan class="tick" style="--i:8" x="208" fill="#e3b583">13</tspan>
+          <tspan class="tick" style="--i:9" x="208" fill="#dcb88a">14</tspan>
+          <tspan class="tick" style="--i:10" x="208" fill="#d2ba90">15</tspan>
+          <tspan class="tick" style="--i:11" x="208" fill="#c8bd95">16</tspan>
+          <tspan class="tick" style="--i:12" x="208" fill="#bebf99">17</tspan>
+          <tspan class="tick" style="--i:13" x="208" fill="#b4c29e">18</tspan>
+          <tspan class="tick" style="--i:14" x="208" fill="#aac4a1">19</tspan>
+          <tspan class="tick last" style="--i:15" x="208" fill="#a0c7a4">20</tspan>
+        </text>
+        <text x="218" y="226" font-size="13">TPS</text>
+        <rect x="2" y="241" width="242" height="5" rx="2.5" fill="#445b4c"/>
+        <rect class="meter" x="2" y="241" width="242" height="5" rx="2.5" fill="#a0c7a4"/>
+        <text x="2" y="270" font-size="13">0</text><text x="244" y="270" text-anchor="end" font-size="13">20</text>
+      </g>
+    </g>
+  </g>
+</svg>

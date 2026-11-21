@@ -1,8 +1,23 @@
-# SnowBall
+<h1 align="center">SnowBall</h1>
 
-**English** | [中文](README_cn.md)
+<p align="center">A Minecraft Java Edition server built on Leaves and Paper.</p>
 
-SnowBall is a Minecraft Java Edition server based on [Leaves](https://github.com/LeavesMC/Leaves) and [Paper](https://github.com/PaperMC/Paper). It carries forward vanilla-mechanics fixes, fake players, and optional optimizations. Current game version: **26.3**. The exact Paper source revision is pinned in [gradle.properties](gradle.properties).
+<p align="center">
+  <img src="https://img.shields.io/badge/Minecraft-26.3-36584a?style=flat-square&amp;labelColor=282c28" alt="Minecraft 26.3">
+  <img src="https://img.shields.io/badge/Java-25-99582f?style=flat-square&amp;labelColor=282c28" alt="Java 25">
+</p>
+
+<p align="center">
+  <strong>English</strong> · <a href="README_cn.md">简体中文</a> · <a href="https://github.com/Yamada0001/SnowBall/releases">Releases</a> · <a href="docs/CONTRIBUTING.md">Contributing</a>
+</p>
+
+<p align="center">
+  <img src="docs/snowball-cover.svg" width="840" alt="SnowBall winter cover: a snowman and a decorated Christmas tree. The demo rises from 5 to 20 TPS, changing from red through orange to green.">
+  <br>
+  <sub>Illustrative tick-rate animation · Not live telemetry or a benchmark.</sub>
+</p>
+
+SnowBall carries forward vanilla-mechanics fixes, fake players, and optional optimizations from [Leaves](https://github.com/LeavesMC/Leaves) and [Paper](https://github.com/PaperMC/Paper). The exact Paper source revision is pinned in [gradle.properties](gradle.properties).
 
 ## Build and run
 
