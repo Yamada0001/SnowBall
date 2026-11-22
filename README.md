@@ -1,4 +1,4 @@
-<h1 align="center">SnowBall</h1>
+<h1 align="center">SnowBall(SB)</h1>
 
 <p align="center">A Minecraft Java Edition server built on Leaves and Paper.</p>
 
