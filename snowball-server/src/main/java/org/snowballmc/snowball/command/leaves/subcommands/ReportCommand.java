@@ -30,6 +30,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static net.kyori.adventure.text.Component.join;
 import static net.kyori.adventure.text.Component.text;
@@ -123,35 +124,27 @@ public class ReportCommand extends LeavesSubcommand {
     }
 
     private static @NotNull String generateDataPackMessage() {
-        final StringBuilder dataPackList = new StringBuilder();
-
-        PackRepository packRepository = MinecraftServer.getServer().getPackRepository();
+        MinecraftServer server = MinecraftServer.getServer();
+        PackRepository packRepository = server.getPackRepository();
         packRepository.reload();
-        Collection<? extends Pack> selectedPacks = packRepository.getSelectedPacks();
-        if (selectedPacks.isEmpty()) {
-            dataPackList.append("There are no data packs enabled");
-        } else {
-            dataPackList.append("There are %s data pack(s) enabled:".formatted(selectedPacks.size()));
-            for (Pack pack : selectedPacks) {
-                dataPackList.append(" ").append(pack.getChatLink(false).getString()).append(",");
-            }
-            dataPackList.deleteCharAt(dataPackList.length() - 1).append("\n");
-        }
+        return formatDataPackMessage(packRepository.getSelectedPacks(), packRepository.getAvailablePacks(), server.getWorldData().enabledFeatures());
+    }
 
-        Collection<Pack> availablePacks = packRepository.getAvailablePacks();
-        FeatureFlagSet featureFlagSet = MinecraftServer.getServer().getWorldData().enabledFeatures();
-        List<Pack> list = availablePacks.stream()
-            .filter(pack -> !selectedPacks.contains(pack) && pack.getRequestedFeatures().isSubsetOf(featureFlagSet))
+    static @NotNull String formatDataPackMessage(Collection<? extends Pack> selectedPacks, Collection<Pack> availablePacks, FeatureFlagSet enabledFeatures) {
+        List<Pack> selectablePacks = availablePacks.stream()
+            .filter(pack -> !selectedPacks.contains(pack) && pack.getRequestedFeatures().isSubsetOf(enabledFeatures))
             .toList();
-        if (list.isEmpty()) {
-            dataPackList.append("There are no more data packs available");
-        } else {
-            dataPackList.append("There are %s data pack(s) available:".formatted(selectedPacks.size()));
-            for (Pack pack : list) {
-                dataPackList.append(" ").append(pack.getChatLink(false).getString()).append(",");
-            }
-        }
-        return dataPackList.toString();
+
+        String enabled = selectedPacks.isEmpty() ? "There are no data packs enabled" : formatDataPacks(selectedPacks, "enabled");
+        String available = selectablePacks.isEmpty() ? "There are no more data packs available" : formatDataPacks(selectablePacks, "available");
+        return enabled + "\n" + available;
+    }
+
+    private static String formatDataPacks(Collection<? extends Pack> packs, String status) {
+        String names = packs.stream()
+            .map(pack -> pack.getChatLink(false).getString())
+            .collect(Collectors.joining(", "));
+        return "There are %s data pack(s) %s: %s".formatted(packs.size(), status, names);
     }
 
     private static void sendOnSuccess(@NotNull CommandSender sender, @NotNull String template, String type) {

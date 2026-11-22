@@ -3,9 +3,7 @@ description:
   表现和原版不同，即使是原版的 bug。
   Behavior is different from vanilla, even if it's a vanilla bug.
 labels:
-  - "scope: not vanilla"
-  - "status: needs triage"
-type: Bug
+  - bug
 body:
   - type: markdown
     attributes:
@@ -18,15 +16,15 @@ body:
         If you are sure, follow the template below to fill in the information and submit your feedback.<br>
         如果这个问题被尝试修复，您可以帮助我们测试并回复。若确认修复，您可以关闭 issue 来告知开发者。
         If this issue is tried to fix, you can help us test and reply. If the issue is fixed, you can close the issue to let the developer confirm.
-  - type: input
-    id: leaves-version
+  - type: textarea
+    id: snowball-version
     attributes:
       label: 服务端版本 SnowBall Version
       description:
-        SnowBall服务端发行版本 SnowBall server release version (contains the git commit's hash)<br>
-        通过执行`/version`命令将获取到的内容复制到这里。 Run `/version` on your server and paste the full, unmodified output here.
+        在服务端执行 `/version`，将完整输出原样粘贴到这里。<br>
+        Run `/version` on your server and paste the full, unmodified output here.
       placeholder: >
-        e.g. This server is running SnowBall version 1.21.1-79-master@21c276f (2024-11-15T15:39:36Z) (Implementing API version 1.21.1-R0.1-SNAPSHOT)
+        e.g. This server is running SnowBall version 26.3-79-dev/26.3@2c62d77 (2026-11-21T12:00:00Z) (Implementing API version 26.3-R0.1-SNAPSHOT)
     validations:
       required: true
   - type: textarea

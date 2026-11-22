@@ -111,7 +111,7 @@
      runtimeOnly("org.xerial:sqlite-jdbc:3.49.1.0")
      runtimeOnly("com.mysql:mysql-connector-j:9.2.0")
      runtimeOnly("com.lmax:disruptor:3.4.4")
-@@ -159,26 +_,36 @@
+@@ -159,26 +_,38 @@
      implementation("me.lucko:spark-paper:1.10.191")
  }
  
@@ -121,7 +121,9 @@
 +    compilerArgs.add("-Xlint:-module")
 +    compilerArgs.add("-Xlint:-removal")
 +    compilerArgs.add("-Xlint:-dep-ann")
-+    compilerArgs.add("--add-modules=jdk.incubator.vector") // SIMD
++    if (name != "compileLeavesclipBootstrap" && name != "compileLeavesclipFix") {
++        compilerArgs.add("--add-modules=jdk.incubator.vector") // SIMD
++    }
 +}
 +// Leaves end - hide irrelevant compilation warnings
 +
@@ -174,7 +176,7 @@
      systemProperty("net.kyori.adventure.text.warnWhenLegacyFormattingDetected", true)
      if (providers.gradleProperty("paper.runDisableWatchdog").getOrElse("false") == "true") {
          systemProperty("disable.watchdog", true)
-@@ -309,25 +_,56 @@
+@@ -309,25 +_,72 @@
      classpath(tasks.createBundlerJar.flatMap { it.outputZip })
      mainClass.set(null as String?)
  }
@@ -186,7 +188,14 @@
 +val releaseGameVersion = rootProject.providers.gradleProperty("mcVersion")
 +val releaseCommit = Git(rootProject.layout.projectDirectory.path)
 +    .exec(providers, "rev-parse", "--short=7", "HEAD").map { it.trim() }
-+// Compile the narrow Leavesclip 3.0.10 override against the original launcher, not the server.
++// Keep the version gate loadable before Java 25; the runtime overrides use the 3.0.10 ABI.
++val compileLeavesclipBootstrap by tasks.registering(JavaCompile::class) {
++    source(fileTree("src/leavesclip/bootstrap"))
++    classpath = files()
++    javaCompiler.set(javaToolchains.compilerFor(java.toolchain))
++    options.release.set(8)
++    destinationDirectory.set(layout.buildDirectory.dir("classes/leavesclipBootstrap"))
++}
 +val upstreamLeavesclip = configurations.named("leavesclip")
 +val compileLeavesclipFix by tasks.registering(JavaCompile::class) {
 +    source(fileTree("src/leavesclip/java"))
@@ -198,10 +207,18 @@
 +val patchedLeavesclip by tasks.registering(Jar::class) {
 +    archiveFileName.set("leavesclip-fixed.jar")
 +    destinationDirectory.set(layout.buildDirectory.dir("launcher"))
-+    from(compileLeavesclipFix)
++    from(compileLeavesclipBootstrap.flatMap { it.destinationDirectory })
++    from(compileLeavesclipFix.flatMap { it.destinationDirectory })
 +    from({ zipTree(upstreamLeavesclip.get().singleFile) }) {
-+        exclude("META-INF/MANIFEST.MF", "org/leavesmc/leavesclip/patch/FileEntry.class")
++        exclude(
++            "META-INF/MANIFEST.MF",
++            "org/leavesmc/leavesclip/Main.class",
++            "org/leavesmc/leavesclip/Leavesclip.class",
++            "org/leavesmc/leavesclip/patch/FileEntry.class",
++            "org/leavesmc/leavesclip/update/AutoUpdate.class",
++        )
 +    }
++    from("src/leavesclip/Leavesclip-SnowBall-MIT.txt") { into("META-INF/license") }
 +    manifest.attributes("Main-Class" to "org.leavesmc.leavesclip.Main")
 +    duplicatesStrategy = DuplicatesStrategy.FAIL
 +}

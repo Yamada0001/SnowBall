@@ -5,7 +5,9 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.nbt.CompoundTag;
 import org.apache.commons.lang3.tuple.Pair;
+import org.bukkit.command.CommandSender;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.snowballmc.snowball.LeavesLogger;
 import org.snowballmc.snowball.bot.ServerBot;
 import org.snowballmc.snowball.bot.agent.ExtraData;
@@ -107,13 +109,13 @@ public abstract class AbstractBotAction<E extends AbstractBotAction<E>> {
 
             event.callEvent();
             if (event.getResult() == BotActionExecuteEvent.Result.SOFT_CANCEL) {
-                this.tickToNext = this.getDoIntervalTick();
+                this.resetInterval();
                 return;
             } else if (event.getResult() == BotActionExecuteEvent.Result.HARD_CANCEL) {
                 if (this.numberRemaining > 0) {
                     this.numberRemaining--;
                 }
-                this.tickToNext = this.getDoIntervalTick();
+                this.resetInterval();
                 return;
             }
 
@@ -131,7 +133,7 @@ public abstract class AbstractBotAction<E extends AbstractBotAction<E>> {
                 if (this.numberRemaining > 0) {
                     this.numberRemaining--;
                 }
-                this.tickToNext = this.getDoIntervalTick();
+                this.resetInterval();
                 if (this.onSuccess != null) {
                     this.onSuccess.accept((E) this);
                 }
@@ -141,6 +143,11 @@ public abstract class AbstractBotAction<E extends AbstractBotAction<E>> {
         } else {
             this.tickToNext--;
         }
+    }
+
+    private void resetInterval() {
+        // The countdown stores skipped ticks, not the tick that executes the action.
+        this.tickToNext = Math.max(1, this.getDoIntervalTick()) - 1;
     }
 
     @NotNull
@@ -171,7 +178,24 @@ public abstract class AbstractBotAction<E extends AbstractBotAction<E>> {
     }
 
     public void stop(@NotNull ServerBot bot, BotActionStopEvent.Reason reason) {
-        new BotActionStopEvent(bot.getBukkitEntity(), this.name, this.uuid, reason, null).callEvent();
+        // Existing lifecycle and API stops notify listeners without allowing a veto.
+        this.fireStopEvent(bot, reason, null);
+        this.finishStop(bot);
+    }
+
+    public boolean stopFromCommand(@NotNull ServerBot bot, @NotNull CommandSender sender) {
+        if (!this.fireStopEvent(bot, BotActionStopEvent.Reason.COMMAND, sender)) {
+            return false;
+        }
+        this.finishStop(bot);
+        return true;
+    }
+
+    private boolean fireStopEvent(ServerBot bot, BotActionStopEvent.Reason reason, @Nullable CommandSender sender) {
+        return new BotActionStopEvent(bot.getBukkitEntity(), this.name, this.uuid, reason, sender).callEvent();
+    }
+
+    protected void finishStop(@NotNull ServerBot bot) {
         this.setCancelled(true);
         if (this.onStop != null) {
             this.onStop.accept((E) this);

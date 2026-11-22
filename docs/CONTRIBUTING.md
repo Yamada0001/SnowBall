@@ -29,44 +29,22 @@ If you're using Windows Operating System, you can use `WSL` to speed up building
 
 ## Understanding "Patches"
 
-SnowBall uses Paper's patching system, with two modules for different parts of the source:
+After cloning your fork, run `./gradlew applyAllPatches` from the repository root. SnowBall's Gradle modules and the generated Git source trees are not the same thing. Choose where to edit based on who owns the source:
 
-- `snowball-api` - Modifications to `Paper-API` / `Spigot-API` / `Bukkit`.
-- `snowball-server` - Modifications to `Paper` / `Spigot` / `CraftBukkit`.
+| Source | Edit and commit in | Rebuild from the repository root | Tracked output |
+| --- | --- | --- | --- |
+| SnowBall-owned source | `snowball-api/src/main`, `snowball-server/src/main`, or the corresponding test sources, in the main Git repository | No patch rebuild | The source files themselves |
+| Paper API (including Bukkit and Spigot API) | `paper-api/` | `./gradlew :rebuildPaperApiPatches` | `snowball-api/paper-patches/` |
+| Paper server (including CraftBukkit) | `paper-server/` | `./gradlew :snowball-server:rebuildPaperServerPatches` | `snowball-server/paper-patches/` |
+| Minecraft (NMS) | `snowball-server/src/minecraft/java/` | `./gradlew :snowball-server:rebuildMinecraftPatches` | `snowball-server/minecraft-patches/` |
 
-The patching system is based on git, and you can learn about it at here: <https://git-scm.com/docs/gittutorial>
+For changes to the generated module build scripts (`snowball-api/build.gradle.kts` or `snowball-server/build.gradle.kts`), edit the script and run `./gradlew :rebuildPaperSingleFilePatches` from the root. Submit the corresponding tracked `build.gradle.kts.patch`, not the generated script.
 
-If you have forked the main repository, then you should follow the steps below:
+Before staging or committing in a patch tree, run `git -C <tree> rev-parse --show-toplevel` and confirm it reports that exact tree. Running Git in `snowball-api/` or `snowball-server/` alone selects the main repository. The generated patch trees have their own `base` (upstream source) and `file` (file patch layer) tags. Feature patch commits are above `file`; inspect them with `git -C <tree> log --oneline file..HEAD`. Do not rebase the main repository onto these tags.
 
-1. Clone your repository to local
-2. Run Gradle's `applyAllPatches` task in your IDE or terminal (You can run `./gradlew applyAllPatches` directly in terminal.)
-3. Enter `snowball-api` or `snowball-server` directory to carry out modifications.
+## Adding or modifying feature patches
 
-BTW, `snowball-api` and `snowball-server` are not normal git repositories.
-
-- Before applying patches, the base will point to unmodified source code.
-- Every commit after the base is a patch.
-- Only commits after the last commit of Paper will be considered Leaves' patches.
-
-## Adding new patches
-
-It's very easy to to add patches by following the steps below:
-
-1. Modify the code of `snowball-api` and / or `snowball-server`
-2. Add these changes to the local git repository (For example, `git add .`)
-3. Commit these changes using `git commit -m <Commit Message>`
-4. Run Gradle's task `rebuildAllServerPatches` to convert your commits to a new patch
-5. Push your patches to your repository
-
-After pushing, you can open a PR to submit your patches.
-
-## Modifying patches
-
-You can modify a existing patch by following the steps below:
-
-1. Modify code at HEAD
-2. Run `git commit -a --fixup <hash>` in your terminal to make a fix-up commit
-    - If you want to edit the commit message, replace `--fixup` with `--squash`.
-3. Run `git rebase -i --autosquash base` to rebase automatically, then just type `:q` to close the confirm page
-4. Run Gradle's task `rebuildAllServerPatches` to modify existing patches
-5. Push and PR again
+1. Edit in the generated tree listed above. Stage only the relevant files there and commit with `git -C <tree> commit -m "Describe the change"`.
+2. To update an existing feature patch rather than adding one, use `git -C <tree> commit --fixup <patch-commit>` instead, then run `git -C <tree> rebase -i --autosquash file`. Review the rebase plan and resolve any conflicts before continuing.
+3. From the main repository root, run the rebuild task for every modified patch tree. Run `git status` and `git diff` there to inspect the tracked patch outputs; rebuilds can rewrite unrelated patch metadata. Include only the intended changes in your PR.
+4. Once your generated-tree edits are safely captured in the tracked patches, run `./gradlew applyAllPatches` again to verify they apply, then run the relevant tests. Commit the tracked patches and any directly tracked SnowBall source changes in the main repository. Do not submit generated Git trees or cache files.

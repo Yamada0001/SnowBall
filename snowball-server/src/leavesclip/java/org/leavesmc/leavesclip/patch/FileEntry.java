@@ -122,7 +122,7 @@ public record FileEntry(byte[] hash, String id, String path) {
     }
 
     private static InputStream openSource(final Path originalRootDir, final String source) throws IOException {
-        final InputStream embedded = AutoUpdate.getResourceAsStreamFromTargetJar(source);
+        final InputStream embedded = AutoUpdate.openResourceFromTargetJar(source);
         if (embedded != null) {
             return embedded;
         }

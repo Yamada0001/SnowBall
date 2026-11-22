@@ -22,8 +22,12 @@ public record VerifiedTransferConfig(ConfigTransformer<? super Object, ? super O
             Object value = transformer.transform(transformer.loadConvert(source.get(path)));
             var comments = source.getComments(path);
             var inlineComments = source.getInlineComments(path);
+            Object savedValue = validator.saveConvert(value);
+            if (savedValue == null) {
+                return false;
+            }
             source.set(path, null);
-            target.set(destination, validator.saveConvert(value));
+            target.set(destination, savedValue);
             target.setComments(destination, comments);
             target.setInlineComments(destination, inlineComments);
             return true;

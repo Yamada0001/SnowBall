@@ -362,7 +362,8 @@ public class LeavesUpdateHelper {
             if (update != null) {
                 return OptionalInt.of(update.build - currentBuild);
             }
-            return this.builds.lastKey() == currentBuild ? OptionalInt.of(0) : OptionalInt.empty();
+            // The current build is known; newer distributions of the same commit do not make it outdated.
+            return OptionalInt.of(0);
         }
 
         String releasesPage() {

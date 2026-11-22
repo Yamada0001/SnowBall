@@ -35,3 +35,9 @@ dependencies {
 Maven 版本后缀不是 Paper 上游的发布渠道。GitHub Releases 用于分发；只有显式设置 `snowballMavenUrl` 时才配置远程 Maven 发布，所用凭据变量为 `SNOWBALL_MAVEN_USERNAME` 和 `SNOWBALL_MAVEN_PASSWORD`。
 
 通过 `./gradlew :snowball-api:test :snowball-server:test` 验证改动。补丁流程见[贡献须知](docs/CONTRIBUTING_cn.md)，许可与上游署名见 [LICENSE](LICENSE.md)。
+
+## 鸣谢
+
+[Leaves](https://github.com/LeavesMC/Leaves) 是服务端的基础；[Leaf](https://github.com/Winds-Studio/Leaf) 提供了快速路径和修复，并为异步寻路提供了思路；[EtheriumMC](https://github.com/deivaxxx/EtheriumMC) 为独立实现的实体剔除和传感器排序实验提供了思路。
+
+共审查了 20 个模组：9 个已移植、3 个由上游覆盖、5 个未移植、3 个暂缓。[早期 19 个模组的审查记录](docs/optimization-mod-porting-spec.md#47-最终裁决总表v13)不含后来加入的 BiomeSpy。[MoePus 的 BiomeSpy 26.1 源码](https://github.com/MoePus/BiomeSpy/tree/77249eff02fb7cf9e971108309cfd2337753fe22)为 SnowBall 在 26.3 上独立实现的生物群系定位与逐列采样提供了思路。

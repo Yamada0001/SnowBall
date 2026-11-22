@@ -1,5 +1,7 @@
 package org.snowballmc.snowball.experimental;
 
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.snowballmc.snowball.LeavesLogger;
@@ -18,6 +20,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /** Independent, restart-only configuration. Workers see only a published immutable snapshot. */
 public final class ExperimentalConfig {
@@ -31,7 +34,7 @@ public final class ExperimentalConfig {
     private static final int MAX_WORKERS = 256;
     private static final Map<String, Object> DEFAULTS = defaults();
     private static volatile Settings current = parse(new YamlConfiguration(), Runtime.getRuntime().availableProcessors(), false, ignored -> {});
-    private static Map<String, Object> startupValues = DEFAULTS;
+    private static Settings diskSettings = current;
     private static Map<String, Object> diskValues = DEFAULTS;
 
     private ExperimentalConfig() {}
@@ -81,16 +84,16 @@ public final class ExperimentalConfig {
             createIfMissing(path);
             YamlConfiguration yaml = read(path);
             Settings parsed = parse(yaml, Runtime.getRuntime().availableProcessors(), Boolean.getBoolean("divinemc.async.guru"),
-                message -> LeavesLogger.LOGGER.warn("{}: {}", path, message));
+                ExperimentalConfig::knownEntityType, message -> LeavesLogger.LOGGER.warn("{}: {}", path, message));
             Map<String, Object> values = values(yaml);
             diskValues = values;
+            diskSettings = parsed;
             if (reload) {
-                if (!values.equals(startupValues)) {
+                if (!parsed.equals(current)) {
                     LeavesLogger.LOGGER.info("Changes to {} take effect after restart", path);
                 }
                 return;
             }
-            startupValues = values;
             current = parsed;
             if (parsed.world().enabled()) {
                 LeavesLogger.LOGGER.warn("{}: experimental parallel world ticking requested. Only eligible worlds use workers; all other ticks remain serial.", path);
@@ -102,9 +105,9 @@ public final class ExperimentalConfig {
         } catch (IOException | InvalidConfigurationException e) {
             LeavesLogger.LOGGER.warn("Cannot read {}; {}: {}", path, reload ? "keeping startup settings" : "experimental features remain disabled", e.getMessage());
             if (!reload) {
-                startupValues = DEFAULTS;
                 diskValues = DEFAULTS;
                 current = parse(new YamlConfiguration(), Runtime.getRuntime().availableProcessors(), false, ignored -> {});
+                diskSettings = current;
             }
         }
     }
@@ -133,10 +136,56 @@ public final class ExperimentalConfig {
         return DEFAULTS.keySet();
     }
 
+    public static List<String> valueSuggestions(String key) {
+        return DEFAULTS.get(key) instanceof Boolean ? List.of("true", "false") : List.of();
+    }
+
     public static synchronized String describe(String key) {
+        if (!DEFAULTS.containsKey(key)) throw new IllegalArgumentException("Unknown experimental setting: " + key);
+        Object active = effectiveValue(current, key);
+        Object next = effectiveValue(diskSettings, key);
         Object saved = diskValues.get(key);
-        Object active = startupValues.get(key);
-        return java.util.Objects.equals(active, saved) ? String.valueOf(active) : active + " (" + saved + " after restart)";
+        String result = String.valueOf(active);
+        if (!java.util.Objects.equals(active, next)) result += " (" + next + " after restart)";
+        if (!sameValue(next, saved)) result += " [saved: " + saved + "]";
+        return result;
+    }
+
+    private static boolean sameValue(Object first, Object second) {
+        if (first instanceof Number a && second instanceof Number b) {
+            try {
+                return new java.math.BigDecimal(a.toString()).compareTo(new java.math.BigDecimal(b.toString())) == 0;
+            } catch (NumberFormatException ignored) {
+                // A non-finite raw YAML value should still be shown separately.
+            }
+        }
+        return java.util.Objects.equals(first, second);
+    }
+
+    private static Object effectiveValue(Settings settings, String key) {
+        return switch (key) {
+            case AUTO, GURU, WORLD + "disable-hard-throw" -> false; // unsupported or reserved
+            case AFFINITY -> settings.sensors().affinity();
+            case WORLD + "enable" -> settings.world().enabled();
+            case WORLD + "thread-count" -> settings.world().threadCount();
+            case WORLD + "log-container-creation-stacktraces" -> settings.world().logContainerCreationStacktraces();
+            case WORLD + "use-per-world-tps-bar" -> settings.world().usePerWorldTpsBar();
+            case WORLD + "show-tps-of-server-instead-of-world" -> settings.world().showTpsOfServerInsteadOfWorld();
+            case SENSORS + "enable" -> settings.sensors().enabled();
+            case SENSORS + "max-threads" -> settings.sensors().maxThreads();
+            case CULLING + "enabled" -> settings.culling().enabled();
+            case CULLING + "threads" -> settings.culling().threads();
+            case CULLING + "check-interval-ms" -> settings.culling().checkIntervalMs();
+            case CULLING + "max-trace-distance" -> settings.culling().maxTraceDistance();
+            case CULLING + "force-visible-radius" -> settings.culling().forceVisibleRadius();
+            case CULLING + "visibility-timeout-ms" -> settings.culling().visibilityTimeoutMs();
+            case CULLING + "aabb-expansion" -> settings.culling().aabbExpansion();
+            case CULLING + "bounding-box-limit" -> settings.culling().boundingBoxLimit();
+            case CULLING + "cull-players" -> settings.culling().cullPlayers();
+            case CULLING + "skip-marker-armor-stands" -> settings.culling().skipMarkerArmorStands();
+            case CULLING + "skipped-entity-types" -> settings.culling().skippedEntityTypes();
+            default -> throw new IllegalArgumentException("Unknown experimental setting: " + key);
+        };
     }
 
     public static synchronized void saveSetting(Path path, String key, String input) throws IOException, InvalidConfigurationException {
@@ -164,8 +213,16 @@ public final class ExperimentalConfig {
         yaml.set(key, candidate);
         yaml.setComments(key, comments);
         yaml.setInlineComments(key, inline);
+        Settings parsed = parse(yaml, Runtime.getRuntime().availableProcessors(), Boolean.getBoolean("divinemc.async.guru"),
+            ExperimentalConfig::knownEntityType, message -> LeavesLogger.LOGGER.warn("{}: {}", path, message));
         writeAtomically(path, yaml.saveToString());
         diskValues = values(yaml);
+        diskSettings = parsed;
+    }
+
+    private static boolean knownEntityType(String id) {
+        Identifier key = Identifier.tryParse(id);
+        return key != null && BuiltInRegistries.ENTITY_TYPE.containsKey(key);
     }
 
     private static void writeAtomically(Path path, String contents) throws IOException {
@@ -185,6 +242,10 @@ public final class ExperimentalConfig {
     }
 
     static Settings parse(YamlConfiguration yaml, int processors, boolean guruProperty, Consumer<String> warn) {
+        return parse(yaml, processors, guruProperty, id -> true, warn);
+    }
+
+    static Settings parse(YamlConfiguration yaml, int processors, boolean guruProperty, Predicate<String> knownEntity, Consumer<String> warn) {
         Reader world = new Reader(yaml, warn);
         boolean worldEnabled = world.bool(WORLD + "enable");
         int worldThreads = world.integer(WORLD + "thread-count", 1, MAX_WORKERS);
@@ -228,8 +289,13 @@ public final class ExperimentalConfig {
             }
             String id = string.toLowerCase(Locale.ROOT);
             if (!id.contains(":")) id = "minecraft:" + id;
-            if (!id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) ray.invalid(CULLING + "skipped-entity-types", "invalid entity identifier: " + string);
-            else skipped.add(id);
+            if (!id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+                ray.invalid(CULLING + "skipped-entity-types", "invalid entity identifier: " + string);
+            } else if (!knownEntity.test(id)) {
+                warn.accept(CULLING + "skipped-entity-types: unknown entity type " + id + " (ignored)");
+            } else {
+                skipped.add(id);
+            }
         }
         return new Settings(new World(worldEnabled, worldEnabled && world.valid, worldThreads, log, tps, globalTps),
             new Sensors(sensorEnabled && sensing.valid, Math.min(MAX_WORKERS, sensorThreads), List.of()),

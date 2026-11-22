@@ -97,6 +97,14 @@ public class ConfigCommand extends LeavesSubcommand {
         @Override
         protected CompletableFuture<Suggestions> getSuggestions(@NotNull CommandContext context, @NotNull SuggestionsBuilder builder) {
             String path = context.getArgument(PathArgument.class);
+            if (path.startsWith("experimental.")) {
+                String key = path.substring("experimental.".length());
+                if (ExperimentalConfig.keys().contains(key)) {
+                    String prefix = builder.getRemainingLowerCase();
+                    ExperimentalConfig.valueSuggestions(key).stream().filter(option -> option.startsWith(prefix)).forEach(builder::suggest);
+                    return builder.buildFuture();
+                }
+            }
             VerifiedConfig verifiedConfig = GlobalConfigManager.getVerifiedConfig(path);
             if (verifiedConfig == null) {
                 return builder
@@ -127,10 +135,11 @@ public class ConfigCommand extends LeavesSubcommand {
             }
             try {
                 verifiedConfig.set(value);
+                String change = verifiedConfig.lock() ? "saved; restart required. Current/pending value:" : "changed to";
                 context.getSender().sendMessage(join(spaces(),
                     text("Config", GRAY),
                     text(path, AQUA),
-                    text("changed to", GRAY),
+                    text(change, GRAY),
                     text(verifiedConfig.getString(), AQUA)
                 ));
                 Bukkit.getOnlinePlayers()
@@ -141,7 +150,7 @@ public class ConfigCommand extends LeavesSubcommand {
                             text(context.getSender().getName() + ":", GRAY),
                             text("Config", GRAY),
                             text(path, AQUA),
-                            text("changed to", GRAY),
+                            text(change, GRAY),
                             text(verifiedConfig.getString(), AQUA)
                         ))
                     );

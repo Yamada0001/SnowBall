@@ -50,6 +50,8 @@ import org.snowballmc.snowball.util.VillagerInfiniteDiscountHelper;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -67,8 +69,11 @@ public final class LeavesConfig {
     public static void init(final @NotNull File file) {
         try {
             File leavesFile = GlobalConfigFiles.prepareLeavesFile(file);
-            configFiles = GlobalConfigFiles.load(leavesFile.toPath(), Path.of("config", GlobalConfigFiles.SNOWBALL_FILE));
-            GlobalConfigManager.init(configFiles);
+            synchronized (GlobalConfigManager.class) {
+                GlobalConfigFiles loaded = GlobalConfigFiles.load(leavesFile.toPath(), Path.of("config", GlobalConfigFiles.SNOWBALL_FILE));
+                GlobalConfigManager.init(loaded);
+                configFiles = loaded;
+            }
             org.snowballmc.snowball.experimental.ExperimentalConfig.load(Path.of("config", org.snowballmc.snowball.experimental.ExperimentalConfig.FILE), false);
         } catch (IOException | InvalidConfigurationException e) {
             throw new IllegalStateException("Unable to load Leaves and SnowBall configuration files", e);
@@ -79,9 +84,11 @@ public final class LeavesConfig {
 
     public static void reload() {
         try {
-            GlobalConfigFiles updated = GlobalConfigFiles.load(configFiles.leavesPath(), configFiles.snowballPath());
-            GlobalConfigManager.reload(updated);
-            configFiles = updated;
+            synchronized (GlobalConfigManager.class) {
+                GlobalConfigFiles updated = GlobalConfigFiles.load(configFiles.leavesPath(), configFiles.snowballPath());
+                GlobalConfigManager.reload(updated);
+                configFiles = updated;
+            }
             org.snowballmc.snowball.experimental.ExperimentalConfig.load(Path.of("config", org.snowballmc.snowball.experimental.ExperimentalConfig.FILE), true);
         } catch (IOException | InvalidConfigurationException e) {
             throw new IllegalStateException("Unable to reload Leaves and SnowBall configuration files", e);
@@ -106,7 +113,7 @@ public final class LeavesConfig {
 
             private static class FakeplayerValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     if (!value.equals(old)) {
                         if (value) {
                             BotCommand.INSTANCE.register();
@@ -210,7 +217,7 @@ public final class LeavesConfig {
                 }
 
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     if (old != null && !old.equals(value)) {
                         Bukkit.getOnlinePlayers().stream()
                             .filter(sender -> subcommands.stream().allMatch(subcommand -> BotCommand.hasPermission(sender, subcommand)))
@@ -341,7 +348,7 @@ public final class LeavesConfig {
 
             private static class VillagerInfiniteDiscountsValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     VillagerInfiniteDiscountHelper.doVillagerInfiniteDiscount(value);
                 }
             }
@@ -370,7 +377,7 @@ public final class LeavesConfig {
 
             private static class RNGFishingValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     LeavesFeatureSet.register(LeavesFeature.of("rng_fishing", value));
                 }
             }
@@ -562,7 +569,7 @@ public final class LeavesConfig {
 
         private static class MovableBuddingAmethystValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 CarpetRules.register(CarpetRule.of("carpet", "movableAmethyst", value));
             }
         }
@@ -722,14 +729,7 @@ public final class LeavesConfig {
 
         private static class ForceVoidTradeValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
-                if (value) {
-                    LeavesConfig.modify.oldMC.voidTrade = true;
-                }
-            }
-
-            @Override
-            public void runAfterLoader(Boolean value, boolean reload) {
+            public void onApplied(Boolean old, Boolean value) {
                 if (value) {
                     LeavesConfig.modify.oldMC.voidTrade = true;
                 }
@@ -745,7 +745,7 @@ public final class LeavesConfig {
 
         private static class McTechnicalModeValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 if (value) {
                     McTechnicalModeHelper.doMcTechnicalMode();
                 }
@@ -765,7 +765,7 @@ public final class LeavesConfig {
 
         private static class UseVanillaRandomValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 LeavesFeatureSet.register(LeavesFeature.of("use_vanilla_random", value));
             }
         }
@@ -828,7 +828,7 @@ public final class LeavesConfig {
 
         private static class CreativeNoClipValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 CarpetRules.register(CarpetRule.of("carpet", "creativeNoClip", value));
             }
         }
@@ -851,7 +851,7 @@ public final class LeavesConfig {
 
         private static class LavaRiptideValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 LeavesFeatureSet.register(LeavesFeature.of("lava_riptide", value));
             }
         }
@@ -863,7 +863,7 @@ public final class LeavesConfig {
 
         private static class NoBlockUpdateValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 if (old != null && !old.equals(value)) {
                     Bukkit.getOnlinePlayers().stream()
                         .filter(sender -> LeavesCommand.hasPermission(sender, "blockupdate"))
@@ -892,7 +892,7 @@ public final class LeavesConfig {
 
         private static class AnvilNotExpensiveValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 CarpetRules.register(CarpetRule.of("pca", "avoidAnvilTooExpensive", value));
             }
         }
@@ -915,7 +915,7 @@ public final class LeavesConfig {
 
             private static class HopperCounterValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     if (old != null && !old.equals(value)) {
                         Bukkit.getOnlinePlayers().stream()
                             .filter(sender -> LeavesCommand.hasPermission(sender, "counter"))
@@ -979,7 +979,7 @@ public final class LeavesConfig {
 
         private static class RenewableCoralValidator extends EnumConfigValidator<RenewableCoralType> {
             @Override
-            public void verify(RenewableCoralType old, RenewableCoralType value) throws IllegalArgumentException {
+            public void onApplied(RenewableCoralType old, RenewableCoralType value) {
                 CarpetRules.register(CarpetRule.of("carpet", "renewableCoral", value));
             }
         }
@@ -1004,7 +1004,7 @@ public final class LeavesConfig {
 
         private static class ExpOrbModeValidator extends EnumConfigValidator<ExpOrbAbsorbMode> {
             @Override
-            public void verify(ExpOrbAbsorbMode old, ExpOrbAbsorbMode value) throws IllegalArgumentException {
+            public void onApplied(ExpOrbAbsorbMode old, ExpOrbAbsorbMode value) {
                 LeavesConfig.modify.fastAbsorbPredicate = switch (value) {
                     case FAST -> player -> true;
                     case VANILLA -> player -> false;
@@ -1593,7 +1593,7 @@ public final class LeavesConfig {
 
             private static class MSPTSyncValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     LeavesFeatureSet.register(LeavesFeature.of("mspt_sync", value));
                 }
             }
@@ -1624,7 +1624,7 @@ public final class LeavesConfig {
 
             public static class SyncmaticaValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     SyncmaticaProtocol.init(value);
                 }
             }
@@ -1652,7 +1652,7 @@ public final class LeavesConfig {
 
             public static class PcaValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     if (old != null && old != value) {
                         PcaSyncProtocol.onConfigModify(value);
                     }
@@ -1757,7 +1757,7 @@ public final class LeavesConfig {
 
                 public static class LitematicsProtocolValidator extends BooleanConfigValidator {
                     @Override
-                    public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                    public void onApplied(Boolean old, Boolean value) {
                         PluginManager pluginManager = MinecraftServer.getServer().server.getPluginManager();
                         if (value) {
                             if (pluginManager.getPermission("leaves.protocol.litematics") == null) {
@@ -1794,14 +1794,7 @@ public final class LeavesConfig {
 
         private static class AlternativePlaceValidator extends EnumConfigValidator<AlternativePlaceType> {
             @Override
-            public void verify(AlternativePlaceType old, AlternativePlaceType value) throws IllegalArgumentException {
-                if (value != AlternativePlaceType.NONE) {
-                    LeavesConfig.modify.disableDistanceCheckForUseItem = true;
-                }
-            }
-
-            @Override
-            public void runAfterLoader(AlternativePlaceType value, boolean reload) {
+            public void onApplied(AlternativePlaceType old, AlternativePlaceType value) {
                 if (value != AlternativePlaceType.NONE) {
                     LeavesConfig.modify.disableDistanceCheckForUseItem = true;
                 }
@@ -1832,7 +1825,7 @@ public final class LeavesConfig {
 
         public static class ReiValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 if (old != value && value != null) {
                     REIServerProtocol.onConfigModify(value);
                 }
@@ -1942,7 +1935,7 @@ public final class LeavesConfig {
 
             public static class ExtraYggdrasilValidator extends BooleanConfigValidator {
                 @Override
-                public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+                public void onApplied(Boolean old, Boolean value) {
                     if (value) {
                         LeavesLogger.LOGGER.warn("extra-yggdrasil-service is an unofficial support. Enabling it may cause data security problems!");
                         GlobalConfiguration.get().unsupportedSettings.performUsernameValidation = true; // always check username
@@ -1963,7 +1956,19 @@ public final class LeavesConfig {
 
             public static class ExtraYggdrasilUrlsValidator extends ListConfigValidator.STRING {
                 @Override
-                public void verify(List<String> old, List<String> value) throws IllegalArgumentException {
+                @SuppressWarnings("deprecation") // Match the URL parser used by the session service.
+                public void verify(List<String> old, List<String> value) {
+                    for (String address : value) {
+                        try {
+                            new URL(address + "/sessionserver/session/minecraft/hasJoined");
+                        } catch (MalformedURLException e) {
+                            throw new IllegalArgumentException("Invalid extra Yggdrasil service URL", e);
+                        }
+                    }
+                }
+
+                @Override
+                public void onApplied(List<String> old, List<String> value) {
                     LeavesMinecraftSessionService.initExtraYggdrasilList(value);
                 }
             }
@@ -1991,22 +1996,21 @@ public final class LeavesConfig {
         public String serverLang = "zh_cn";
 
         private static class ServerLangValidator extends StringConfigValidator {
-            private static final List<String> supportLang = new ArrayList<>(List.of("en_us"));
-
             @Override
             public void verify(String old, String value) throws IllegalArgumentException {
-                if (!ServerI18nUtil.finishPreload ||
-                    !ServerI18nUtil.tryAppendLanguages(supportLang)) {
-                    return;
-                }
-                if (!supportLang.contains(value)) {
+                List<String> supported = new ArrayList<>(List.of("en_us"));
+                if (ServerI18nUtil.finishPreload && ServerI18nUtil.tryAppendLanguages(supported) && !supported.contains(value)) {
                     throw new IllegalArgumentException("lang " + value + " not supported");
                 }
             }
 
             @Override
             public List<String> valueSuggest() {
-                return supportLang;
+                List<String> supported = new ArrayList<>(List.of("en_us"));
+                if (ServerI18nUtil.finishPreload) {
+                    ServerI18nUtil.tryAppendLanguages(supported);
+                }
+                return supported;
             }
         }
 
@@ -2117,7 +2121,7 @@ public final class LeavesConfig {
 
         private static class DisplayNameValidator extends BooleanConfigValidator {
             @Override
-            public void verify(Boolean old, Boolean value) throws IllegalArgumentException {
+            public void onApplied(Boolean old, Boolean value) {
                 if (value == old) {
                     return;
                 }

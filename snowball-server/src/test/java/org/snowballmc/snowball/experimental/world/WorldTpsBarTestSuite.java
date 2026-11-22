@@ -48,7 +48,24 @@ class WorldTpsBarTest {
     }
 
     @Test
-    void staleSamplesAreNotReportedAndNewTicksRetireOldSamples() {
+    void intentionalEmptyPauseStartsANewSampleWindowEvenWhenShort() {
+        final WorldTickPacing pacing = new WorldTickPacing();
+        pacing.completedTick(0L, MS);
+        pacing.completedTick(2 * TARGET, 2 * TARGET + MS);
+        assertEquals(10.0, pacing.average(2 * TARGET + MS, TARGET));
+
+        pacing.resetForEmptyPause();
+        pacing.resetForEmptyPause(); // The empty branch can run on multiple consecutive ticks.
+        final long resumed = 6 * TARGET;
+        assertNull(pacing.average(resumed, TARGET));
+        pacing.completedTick(resumed, resumed + MS);
+        assertNull(pacing.average(resumed + MS, TARGET), "one resumed tick does not establish pacing");
+        pacing.completedTick(resumed + TARGET, resumed + TARGET + MS);
+        assertEquals(20.0, pacing.average(resumed + TARGET + MS, TARGET));
+    }
+
+    @Test
+    void staleSamplesAreNotReportedButARealLagGapStillCounts() {
         final WorldTickPacing pacing = new WorldTickPacing();
         final long gap = WorldTickPacing.WINDOW_NANOS + 100 * MS;
         pacing.completedTick(0L, MS);

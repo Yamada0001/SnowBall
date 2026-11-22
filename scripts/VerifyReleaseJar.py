@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Verify a Leavesclip release JAR with Java 25 on PATH.
+"""Verify a Leavesclip release JAR with Java 25 or newer on PATH.
 
 Usage: python scripts/VerifyReleaseJar.py <release.jar>
 The cold run may download the Mojang server into a temporary directory.
+The real server entrypoint is exercised with --version, without starting a world.
 """
 
 import argparse
@@ -86,17 +87,42 @@ def verify_outputs(work, entries, phase):
     print(f"{phase}: verified SHA-256 for {len(entries)} outputs", flush=True)
 
 
-def patch(java, artifact, work, phase, expected_error=None):
-    print(f"{phase}: running Leavesclip in patch-only mode", flush=True)
+def java_environment():
     env = os.environ.copy()
     # Keep locally injected JVM flags from redirecting the launcher out of the temp directory.
     for key in ("JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"):
         env.pop(key, None)
+    return env
+
+
+def require_supported_java():
+    java = shutil.which("java")
+    if not java:
+        raise VerificationError("Java not found on PATH; use Java 25 or newer")
+    java = str(Path(java).resolve())
     try:
         result = subprocess.run(
-            [java, "-Dleavesclip.disable.auto-update=true", "-Dleavesclip.patchonly=true",
-             "-jar", str(artifact)],
-            cwd=work, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            [java, "-XshowSettings:properties", "-version"], env=java_environment(),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            encoding="utf-8", errors="replace", timeout=15,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise VerificationError("Checking the Java version timed out") from exc
+    match = re.search(r"(?m)^[ \t]*java\.specification\.version[ \t]*=[ \t]*(\S+)", result.stdout)
+    if result.returncode or match is None:
+        raise VerificationError(f"Could not determine Java version for {java}: {result.stdout.strip()}")
+    version = match[1]
+    feature = re.match(r"(?:1\.)?(\d+)(?:\.|$)", version)
+    if feature is None or int(feature[1]) < 25:
+        raise VerificationError(f"SnowBall requires Java 25 or newer; {java} reports Java {version}")
+    return java
+
+
+def run_release(java, artifact, work, phase, jvm_args=(), args=(), expected_error=None):
+    try:
+        result = subprocess.run(
+            [java, "-Dleavesclip.disable.auto-update=true", *jvm_args, "-jar", str(artifact), *args],
+            cwd=work, env=java_environment(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, encoding="utf-8", errors="replace", timeout=300,
         )
     except subprocess.TimeoutExpired as exc:
@@ -105,15 +131,41 @@ def patch(java, artifact, work, phase, expected_error=None):
     if result.stdout:
         print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
     if expected_error is not None:
-        if expected_error not in result.stdout:
-            raise VerificationError(f"{phase}: expected Leavesclip to report {expected_error!r}")
-        return
+        if result.returncode == 0 or expected_error not in result.stdout:
+            raise VerificationError(f"{phase}: expected nonzero exit with {expected_error!r}")
+        return result.stdout
     if result.returncode:
         raise VerificationError(f"{phase}: Java exited with status {result.returncode}")
-    # Main can report an exception without returning a nonzero process exit status.
+    # Also reject errors that the packaged server or launcher might log without propagating.
     if re.search(r"(?im)^\s*(?:\[[^\]\r\n]*\b(?:ERROR|FATAL)\]:|Exception in thread |"
                  r"Caused by: |[\w.$]*(?:Exception|Error)(?::|$))", result.stdout):
         raise VerificationError(f"{phase}: Leavesclip logged an error despite Java exiting 0")
+    return result.stdout
+
+
+def patch(java, artifact, work, phase, expected_error=None):
+    print(f"{phase}: running Leavesclip in patch-only mode", flush=True)
+    run_release(java, artifact, work, phase, jvm_args=("-Dleavesclip.patchonly=true",),
+                expected_error=expected_error)
+
+
+def verify_entrypoint(java, artifact, work, versions):
+    expected_versions = set()
+    for relative, _, _ in versions:
+        with zipfile.ZipFile(work / relative) as server:
+            manifest = server.read("META-INF/MANIFEST.MF").replace(b"\r\n", b"\n").replace(b"\n ", b"")
+        main_section = manifest.split(b"\n\n", 1)[0].decode("utf-8")
+        version = re.search(r"(?mi)^Implementation-Version: (\S+)$", main_section)
+        if version is not None:
+            expected_versions.add(version[1])
+    output = run_release(java, artifact, work, "Server entrypoint", args=("--version",))
+    if not expected_versions.intersection(line.strip() for line in output.splitlines()):
+        raise VerificationError("Server entrypoint: --version did not report the extracted server version")
+
+    missing_class = "org.snowballmc.verifier.IntentionallyMissingEntrypoint"
+    run_release(java, artifact, work, "Rejected server entrypoint",
+                jvm_args=(f"-DbundlerMainClass={missing_class}",), args=("--version",),
+                expected_error=f"ClassNotFoundException: {missing_class}")
 
 
 def verify_rejected_dependency(java, artifact, work, relative, expected):
@@ -142,6 +194,7 @@ def verify_rejected_dependency(java, artifact, work, relative, expected):
 
 def verify(artifact):
     artifact = artifact.resolve(strict=True)
+    java = require_supported_java()
     check_zip(artifact, "Outer release JAR")
     print(f"Outer JAR CRC OK: {artifact.name}", flush=True)
     with zipfile.ZipFile(artifact) as jar:
@@ -152,9 +205,6 @@ def verify(artifact):
     if len(joml) != 1:
         raise VerificationError(f"Expected one org.joml:joml library in the index, found {len(joml)}")
     joml_relative, joml_digest = joml[0]
-    java = shutil.which("java")
-    if not java:
-        raise VerificationError("Java not found on PATH; use JDK 25")
 
     with tempfile.TemporaryDirectory(prefix="snowball-release-check-") as directory:
         work = Path(directory).resolve()
@@ -164,6 +214,7 @@ def verify(artifact):
         for relative, _, _ in versions:
             check_zip(work / relative, f"Server JAR {relative}")
             print(f"Server JAR CRC OK: {relative}", flush=True)
+        verify_entrypoint(java, artifact, work, versions)
 
         joml_path = work / joml_relative
         with joml_path.open("r+b") as stream:

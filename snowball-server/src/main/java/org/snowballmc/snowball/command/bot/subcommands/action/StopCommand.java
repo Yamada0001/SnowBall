@@ -13,7 +13,6 @@ import org.snowballmc.snowball.command.ArgumentNode;
 import org.snowballmc.snowball.command.CommandContext;
 import org.snowballmc.snowball.command.LiteralNode;
 import org.snowballmc.snowball.command.bot.subcommands.ActionCommand;
-import org.snowballmc.snowball.event.bot.BotActionStopEvent;
 
 import java.util.HashSet;
 import java.util.List;
@@ -68,12 +67,7 @@ public class StopCommand extends LiteralNode {
             }
 
             AbstractBotAction<?> action = bot.getBotActions().get(index);
-            BotActionStopEvent event = new BotActionStopEvent(
-                bot.getBukkitEntity(), action.getName(), action.getUUID(), BotActionStopEvent.Reason.COMMAND, sender
-            );
-            event.callEvent();
-            if (!event.isCancelled()) {
-                action.stop(bot, BotActionStopEvent.Reason.COMMAND);
+            if (action.stopFromCommand(bot, sender)) {
                 bot.getBotActions().remove(index);
                 sender.sendMessage(join(spaces(),
                     text("Already stopped", GRAY),
@@ -108,13 +102,8 @@ public class StopCommand extends LiteralNode {
             Set<AbstractBotAction<?>> canceled = new HashSet<>();
             Set<AbstractBotAction<?>> forRemoval = new HashSet<>();
             for (AbstractBotAction<?> action : actions) {
-                BotActionStopEvent event = new BotActionStopEvent(
-                    bot.getBukkitEntity(), action.getName(), action.getUUID(), BotActionStopEvent.Reason.COMMAND, sender
-                );
-                event.callEvent();
-                if (!event.isCancelled()) {
+                if (action.stopFromCommand(bot, sender)) {
                     forRemoval.add(action);
-                    action.stop(bot, BotActionStopEvent.Reason.COMMAND);
                 } else {
                     canceled.add(action);
                 }

@@ -1,8 +1,13 @@
 package org.snowballmc.snowball.experimental.culling;
 
-/** Detached geometry; no Minecraft types or mutable world state. */
+import java.util.concurrent.TimeUnit;
+
+/** Detached geometry and proof timing; no Minecraft types or mutable world state. */
 final class Raytrace {
     private static final double EDGE_MARGIN = 1.0e-6;
+    private static final int PROOF_INTERVALS = 3;
+    private static final long MIN_PROOF_TTL_MS = 150L;
+    private static final long MAX_PROOF_TTL_MS = 500L;
 
     private Raytrace() {
     }
@@ -56,8 +61,16 @@ final class Raytrace {
         }
     }
 
-    static boolean fresh(final long captured, final long now, final int intervalMs) {
-        return now - captured < Math.clamp(intervalMs * 3L, 150L, 500L) * 1_000_000L;
+    static long checkIntervalNanos(final int configuredMs) {
+        // Keep a renewal window after the scheduled check for tick granularity and async completion.
+        // A long configured interval must not outlive the maximum proof TTL.
+        return Math.min(TimeUnit.MILLISECONDS.toNanos(configuredMs), TimeUnit.MILLISECONDS.toNanos(MAX_PROOF_TTL_MS) / PROOF_INTERVALS);
+    }
+
+    static boolean fresh(final long captured, final long now, final int configuredMs) {
+        final long age = now - captured;
+        final long ttlMs = Math.clamp(configuredMs * (long)PROOF_INTERVALS, MIN_PROOF_TTL_MS, MAX_PROOF_TTL_MS);
+        return age >= 0L && age < TimeUnit.MILLISECONDS.toNanos(ttlMs);
     }
 
     static int axis(final Box eye, final Box target) {

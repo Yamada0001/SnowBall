@@ -158,6 +158,28 @@ class LeavesUpdateHelperTest {
     }
 
     @Test
+    void reportsKnownBuildAsCurrentWhenNewerReleasesOnlyRedistributeItsCommit() {
+        LeavesUpdateHelper.ReleaseCatalog catalog = new LeavesUpdateHelper.ReleaseCatalog(CANONICAL_SLUG, MC_VERSION, false);
+        catalog.addPage(array(release(103, "1234567890abcdef1234567890abcdef12345678"),
+            release(101, CURRENT_SHA), release(100, CURRENT_SHA), release(99, NEW_SHA)));
+        String localSha = "1234567890ABCDEF1234567890ABCDEF12345678";
+        assertNull(catalog.newerBuild(localSha, 100));
+        assertEquals(0, catalog.versionDistance(localSha, 100).orElseThrow());
+        assertEquals(0, catalog.versionDistance(localSha, 103).orElseThrow());
+        assertTrue(catalog.versionDistance(localSha, 102).isEmpty());
+    }
+
+    @Test
+    void reportsDistanceToHighestNewerBuildWithADistinctCommit() {
+        LeavesUpdateHelper.ReleaseCatalog catalog = new LeavesUpdateHelper.ReleaseCatalog(CANONICAL_SLUG, MC_VERSION, false);
+        catalog.addPage(array(release(105, CURRENT_SHA), release(102, NEW_SHA), release(100, CURRENT_SHA),
+            release(104, "fedcba0"), release(101, CURRENT_SHA)));
+        assertEquals(104, catalog.newerBuild(CURRENT_SHA, 100).build());
+        assertEquals(4, catalog.versionDistance(CURRENT_SHA, 100).orElseThrow());
+        assertTrue(catalog.versionDistance(CURRENT_SHA, 99).isEmpty());
+    }
+
+    @Test
     void selectsHighestBuildRegardlessOfReleaseOrder() {
         LeavesUpdateHelper.LeavesBuildInfo selected = select(release(103, NEW_SHA), release(101, "fedcba0"), release(102, "bcd1234"));
         assertNotNull(selected);

@@ -6,6 +6,9 @@ import org.junit.jupiter.api.io.TempDir;
 import org.snowballmc.snowball.LeavesConfig;
 import org.snowballmc.snowball.config.annotations.GlobalConfig;
 import org.snowballmc.snowball.config.annotations.TransferConfig;
+import org.snowballmc.snowball.config.api.ConfigValidator;
+import org.snowballmc.snowball.config.api.impl.ConfigValidatorImpl.BooleanConfigValidator;
+import org.snowballmc.snowball.config.api.impl.ConfigValidatorImpl.IntConfigValidator;
 import org.snowballmc.snowball.util.LeavesUpdateHelper;
 
 import java.io.IOException;
@@ -233,9 +236,12 @@ class GlobalConfigFilesTestSuite {
         assertTrue(fixture.barrel);
         assertTrue(load().snowball().getBoolean(BARREL));
         assertEquals(leavesBefore, Files.readString(leavesPath));
-        assertThrows(IllegalArgumentException.class, () -> GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit").set("22"));
+        VerifiedConfig locked = GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit");
+        assertTrue(locked.lock());
+        assertDoesNotThrow(() -> locked.set("22"));
         assertEquals(22, load().snowball().getInt(RAIL_LIMIT));
         assertEquals(12, fixture.limit);
+        assertEquals("12(22 after restart)", locked.getString());
         String snowballBefore = Files.readString(snowballPath);
         GlobalConfigManager.getVerifiedConfig("misc.server-mod-name").set("Command");
         assertEquals("Command", fixture.name);
@@ -243,14 +249,182 @@ class GlobalConfigFilesTestSuite {
         assertEquals(snowballBefore, Files.readString(snowballPath));
     }
 
+    @Test
+    void commandPreservesUnrelatedDiskEditsAndRejectsNonBooleanInput() throws Exception {
+        Settings fixture = new Settings();
+        GlobalConfigFiles files = load();
+        GlobalConfigManager.load(files, fixtureEntries(fixture, files), false);
+        Files.writeString(files.snowballPath(), """
+            # Custom header
+
+            settings:
+              modify:
+                # Custom barrel comment
+                large-barrel: false # Custom inline comment
+              performance:
+                rail-power-limit: 19
+              manual-section:
+                keep: hand-edited
+            """);
+        String leavesBefore = Files.readString(files.leavesPath());
+        String snowballBefore = Files.readString(files.snowballPath());
+        VerifiedConfig barrel = GlobalConfigManager.getVerifiedConfig("modify.large-barrel");
+        for (String invalid : List.of("tru", "yes", "no", "0", "", " true ")) {
+            assertThrows(IllegalArgumentException.class, () -> barrel.set(invalid), invalid);
+        }
+        assertEquals(snowballBefore, Files.readString(files.snowballPath()));
+        assertFalse(fixture.barrel);
+
+        barrel.set("TrUe");
+        GlobalConfigFiles saved = load();
+        assertTrue(fixture.barrel);
+        assertEquals("true", barrel.getString());
+        assertEquals("8", GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit").getString());
+        assertTrue(saved.snowball().getBoolean(BARREL));
+        assertEquals(19, saved.snowball().getInt(RAIL_LIMIT));
+        assertEquals("hand-edited", saved.snowball().getString("settings.manual-section.keep"));
+        assertEquals(List.of("Custom header"), saved.snowball().options().getHeader());
+        assertEquals(List.of("Custom barrel comment"), saved.snowball().getComments(BARREL));
+        assertEquals(List.of("Custom inline comment"), saved.snowball().getInlineComments(BARREL));
+        assertEquals(leavesBefore, Files.readString(files.leavesPath()));
+        barrel.set("FaLsE");
+        assertFalse(fixture.barrel);
+        assertFalse(load().snowball().getBoolean(BARREL));
+    }
+
+    @Test
+    void reloadMigratesLockedLegacyAliasAndBacksUpItsOriginalBytes() throws Exception {
+        Settings fixture = new Settings();
+        GlobalConfigFiles initial = load();
+        GlobalConfigManager.load(initial, fixtureEntries(fixture, initial), false);
+        assertEquals(8, fixture.limit);
+        assertEquals(1, fixture.lockedApplications);
+        String legacy = "settings:\n  modify:\n    old-limit: 14 # Old comment\n";
+        Files.writeString(initial.leavesPath(), legacy);
+        Files.delete(initial.snowballPath());
+        GlobalConfigFiles changed = load();
+        GlobalConfigManager.load(changed, fixtureEntries(fixture, changed), true);
+
+        GlobalConfigFiles migrated = load();
+        assertFalse(migrated.leaves().contains("settings.modify.old-limit"));
+        assertEquals(14, migrated.snowball().getInt(RAIL_LIMIT));
+        assertEquals(List.of("Old comment"), migrated.snowball().getInlineComments(RAIL_LIMIT));
+        assertEquals(8, fixture.limit);
+        assertEquals(1, fixture.lockedApplications);
+        VerifiedConfig locked = GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit");
+        assertEquals("8(14 after restart)", locked.getString());
+        locked.set("16");
+        assertEquals(8, fixture.limit);
+        assertEquals(1, fixture.lockedApplications);
+        assertEquals("8(16 after restart)", locked.getString());
+        try (var backups = Files.list(initial.leavesPath().getParent())) {
+            List<Path> matches = backups.filter(path -> path.getFileName().toString().matches("leaves\\.yml\\.migration-.+\\.bak")).toList();
+            assertEquals(1, matches.size());
+            assertEquals(legacy, Files.readString(matches.getFirst()));
+        }
+    }
+
+    @Test
+    void failedWritesDoNotPublishRuntimeValuesCallbacksOrQuerySnapshots() throws Exception {
+        Settings fixture = new Settings();
+        GlobalConfigFiles files = load();
+        GlobalConfigManager.load(files, fixtureEntries(fixture, files), false);
+        VerifiedConfig barrel = GlobalConfigManager.getVerifiedConfig("modify.large-barrel");
+        VerifiedConfig locked = GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit");
+        locked.set("19");
+        assertEquals(1, fixture.barrelApplications);
+        assertEquals(1, fixture.lockedApplications);
+
+        // Stage valid values, then obstruct the second file at save time.
+        GlobalConfigFiles candidates = load();
+        candidates.snowball().set(BARREL, true);
+        candidates.snowball().set(RAIL_LIMIT, 25);
+        candidates.leaves().set(SERVER_NAME, "Not published");
+        Files.delete(candidates.leavesPath());
+        Files.createDirectory(candidates.leavesPath());
+        Files.writeString(candidates.leavesPath().resolve("block-replacement"), "keep");
+        assertThrows(IOException.class, () -> GlobalConfigManager.load(candidates, fixtureEntries(fixture, candidates), true));
+        assertSame(barrel, GlobalConfigManager.getVerifiedConfig("modify.large-barrel"));
+        assertSame(locked, GlobalConfigManager.getVerifiedConfig("performance.rail-power-limit"));
+        assertEquals("false", barrel.getString());
+        assertEquals("8(19 after restart)", locked.getString());
+        assertEquals("SnowBall", fixture.name);
+        assertFalse(fixture.barrel);
+        assertEquals(8, fixture.limit);
+        assertEquals(1, fixture.barrelApplications);
+        assertEquals(1, fixture.lockedApplications);
+
+        // A malformed owning file must not be overwritten or change the published snapshot.
+        String invalidYaml = "settings: [\n";
+        Files.writeString(files.snowballPath(), invalidYaml);
+        assertThrows(IllegalArgumentException.class, () -> barrel.set("true"));
+        assertThrows(IllegalArgumentException.class, () -> locked.set("22"));
+        assertEquals(invalidYaml, Files.readString(files.snowballPath()));
+        assertEquals("false", barrel.getString());
+        assertEquals("8(19 after restart)", locked.getString());
+        assertEquals(1, fixture.barrelApplications);
+    }
+
+    @Test
+    void realConfigAppliesDependentRuntimeFieldOnlyAfterSave() throws Exception {
+        GlobalConfigFiles files = load();
+        VerifiedConfig forceVoidTrade = GlobalConfigManager.entries(files).stream()
+            .filter(entry -> entry.path().equals("settings.modify.force-void-trade"))
+            .findFirst().orElseThrow();
+        boolean originalForce = LeavesConfig.modify.forceVoidTrade;
+        boolean originalVoidTrade = LeavesConfig.modify.oldMC.voidTrade;
+        try {
+            LeavesConfig.modify.forceVoidTrade = false;
+            LeavesConfig.modify.oldMC.voidTrade = false;
+            Files.createDirectories(files.leavesPath().getParent());
+            Files.writeString(files.leavesPath(), "settings: [\n");
+            assertThrows(IllegalArgumentException.class, () -> forceVoidTrade.set("true"));
+            assertFalse(LeavesConfig.modify.forceVoidTrade);
+            assertFalse(LeavesConfig.modify.oldMC.voidTrade);
+            assertFalse(files.leaves().contains(forceVoidTrade.path()));
+
+            Files.writeString(files.leavesPath(), "settings: {}\n");
+            forceVoidTrade.set("true");
+            assertTrue(LeavesConfig.modify.forceVoidTrade);
+            assertTrue(LeavesConfig.modify.oldMC.voidTrade);
+            assertTrue(load().leaves().getBoolean(forceVoidTrade.path()));
+        } finally {
+            LeavesConfig.modify.forceVoidTrade = originalForce;
+            LeavesConfig.modify.oldMC.voidTrade = originalVoidTrade;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
     private static List<VerifiedConfig> fixtureEntries(Settings fixture, GlobalConfigFiles files) {
-        return java.util.Arrays.stream(Settings.class.getDeclaredFields()).map(field -> {
-            field.setAccessible(true);
-            return VerifiedConfig.build(field.getAnnotation(GlobalConfig.class), field, fixture, "settings.", files);
-        }).toList();
+        return java.util.Arrays.stream(Settings.class.getDeclaredFields())
+            .filter(field -> field.isAnnotationPresent(GlobalConfig.class))
+            .map(field -> {
+                field.setAccessible(true);
+                VerifiedConfig config = VerifiedConfig.build(field.getAnnotation(GlobalConfig.class), field, fixture, "settings.", files);
+                ConfigValidator<?> validator = switch (field.getName()) {
+                    case "barrel" -> new BooleanConfigValidator() {
+                        @Override
+                        public void onApplied(Boolean old, Boolean value) {
+                            fixture.barrelApplications++;
+                        }
+                    };
+                    case "limit" -> new IntConfigValidator() {
+                        @Override
+                        public void onApplied(Integer old, Integer value) {
+                            fixture.lockedApplications++;
+                        }
+                    };
+                    default -> config.validator();
+                };
+                return new VerifiedConfig((ConfigValidator<? super Object>) validator,
+                    config.lock(), field, fixture, config.path(), files, config.snowball());
+            }).toList();
     }
 
     private static final class Settings {
+        int barrelApplications;
+        int lockedApplications;
+
         @GlobalConfig(value = "modify.large-barrel", snowball = true)
         boolean barrel;
 

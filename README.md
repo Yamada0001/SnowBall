@@ -54,7 +54,9 @@ Run `./gradlew :snowball-api:test :snowball-server:test` to verify your changes.
 ## Credits
 
 <p align="center">
-  <img src="docs/snowball-credits.svg" width="840" alt="SnowBall credits: Leaves is the server base, Leaf contributed ports and design ideas, and EtheriumMC inspired independent culling and sensor experiments. Of 19 mods reviewed, 8 were ported, 3 were covered upstream, 5 were not ported, and 3 were deferred.">
+  <img src="docs/snowball-credits.svg" width="840" alt="SnowBall credits: Leaves is the server base, Leaf contributed fast paths and fixes, and EtheriumMC inspired independent culling and sensor experiments. Of 20 mods reviewed, 9 were ported, 3 were covered upstream, 5 were not ported, and 3 were deferred. The ports include biome locate and column sampling work inspired by MoePus's BiomeSpy.">
 </p>
 
-Sources: [Leaves](https://github.com/LeavesMC/Leaves) · [Leaf](https://github.com/Winds-Studio/Leaf) · [EtheriumMC](https://github.com/deivaxxx/EtheriumMC) · [19-mod review and porting details](docs/optimization-mod-porting-spec.md#47-最终裁决总表v13).
+Sources: [Leaves](https://github.com/LeavesMC/Leaves) · [Leaf](https://github.com/Winds-Studio/Leaf) · [EtheriumMC](https://github.com/deivaxxx/EtheriumMC).
+
+The [original 19-mod review](docs/optimization-mod-porting-spec.md#47-最终裁决总表v13) predates BiomeSpy. [MoePus's BiomeSpy 26.1 source](https://github.com/MoePus/BiomeSpy/tree/77249eff02fb7cf9e971108309cfd2337753fe22) inspired SnowBall's independent 26.3 implementation for biome locate and column sampling.

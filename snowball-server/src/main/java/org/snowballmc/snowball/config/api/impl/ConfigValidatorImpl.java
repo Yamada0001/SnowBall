@@ -16,7 +16,13 @@ public abstract class ConfigValidatorImpl<E> implements ConfigValidator<E> {
     public static class BooleanConfigValidator extends ConfigValidatorImpl<Boolean> {
         @Override
         public Boolean stringConvert(String value) throws IllegalArgumentException {
-            return Boolean.parseBoolean(value);
+            if ("true".equalsIgnoreCase(value)) {
+                return true;
+            }
+            if ("false".equalsIgnoreCase(value)) {
+                return false;
+            }
+            throw new IllegalArgumentException("expected true or false");
         }
 
         @Override

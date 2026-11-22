@@ -1,5 +1,6 @@
 package org.snowballmc.snowball.config;
 
+import org.bukkit.configuration.InvalidConfigurationException;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.jetbrains.annotations.Contract;
 import org.jetbrains.annotations.NotNull;
@@ -10,7 +11,9 @@ import org.snowballmc.snowball.config.api.ConfigValidator;
 import org.snowballmc.snowball.config.api.impl.AutoConfigValidator;
 
 import java.io.IOException;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
+import java.util.Objects;
 
 public record VerifiedConfig(ConfigValidator<? super Object> validator, boolean lock, Field field, Object upstreamField, String path, GlobalConfigFiles files, boolean snowball) {
 
@@ -19,59 +22,73 @@ public record VerifiedConfig(ConfigValidator<? super Object> validator, boolean 
     }
 
     public void set(String stringValue) throws IllegalArgumentException {
-        Object value;
-        try {
-            value = validator.stringConvert(stringValue);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("value parse error: " + e.getMessage());
-        }
-
-        validator.verify(this.get(), value);
-
-        try {
-            YamlConfiguration yaml = configuration();
-            Object previous = yaml.get(path);
-            yaml.set(path, validator.saveConvert(value));
+        synchronized (GlobalConfigManager.class) {
+            Object value;
             try {
-                files.save(snowball);
-            } catch (IOException e) {
-                yaml.set(path, previous);
+                value = checkedValue(validator.stringConvert(stringValue));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("value parse error: " + e.getMessage(), e);
+            }
+
+            Object old = get();
+            validator.verify(old, value);
+            try {
+                files.saveKey(snowball, path, validator.saveConvert(value), field.getAnnotation(GlobalConfig.class));
+            } catch (IOException | InvalidConfigurationException e) {
                 LeavesLogger.LOGGER.error("Unable to save configuration {}", path, e);
                 throw new IllegalArgumentException("Unable to save " + path, e);
             }
-            if (lock) {
-                throw new IllegalArgumentException("locked, will load after restart");
+            if (!lock) {
+                applyValue(value);
+                validator.onApplied(old, value);
             }
+        }
+    }
+
+    Object checkedValue(Object value) {
+        Class<?> type = field.getType();
+        if (type.isPrimitive() ? !MethodType.methodType(type).wrap().returnType().isInstance(value)
+            : value != null && !type.isInstance(value)) {
+            throw new IllegalArgumentException("expected " + type.getSimpleName());
+        }
+        return value;
+    }
+
+    void applyValue(Object value) {
+        try {
             field.set(upstreamField, value);
         } catch (IllegalAccessException e) {
-            throw new IllegalArgumentException(e.getMessage());
+            throw new IllegalStateException("Cannot apply " + path, e);
         }
     }
 
     public Object get() {
-        try {
-            return field.get(upstreamField);
-        } catch (IllegalAccessException e) {
-            LeavesLogger.LOGGER.error("Failure to get {} value", path, e);
-            return "<VALUE ERROR>";
+        synchronized (GlobalConfigManager.class) {
+            try {
+                return field.get(upstreamField);
+            } catch (IllegalAccessException e) {
+                LeavesLogger.LOGGER.error("Failure to get {} value", path, e);
+                return "<VALUE ERROR>";
+            }
         }
     }
 
     public String getString() {
-        Object value = this.get();
-
-        Object savedValue = configuration().get(path);
-        try {
-            if (savedValue != null) {
-                savedValue = validator.loadConvert(savedValue);
-                if (!savedValue.equals(value)) {
-                    return value.toString() + "(" + savedValue + " after restart)";
+        synchronized (GlobalConfigManager.class) {
+            Object value = get();
+            Object savedValue = configuration().get(path);
+            try {
+                if (lock && savedValue != null) {
+                    savedValue = validator.loadConvert(savedValue);
+                    if (!Objects.equals(savedValue, value)) {
+                        return value + "(" + savedValue + " after restart)";
+                    }
                 }
+            } catch (IllegalArgumentException | ClassCastException e) {
+                LeavesLogger.LOGGER.error("Failure to get {} value", path, e);
             }
-        } catch (IllegalArgumentException e) {
-            LeavesLogger.LOGGER.error("Failure to get {} value", path, e);
+            return String.valueOf(value);
         }
-        return value.toString();
     }
 
     @NotNull

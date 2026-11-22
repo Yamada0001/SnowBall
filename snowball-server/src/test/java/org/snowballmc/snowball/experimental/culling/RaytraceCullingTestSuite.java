@@ -26,13 +26,16 @@ class RaytraceCullingTest {
     }
 
     @Test
-    void removingOneWallCellCannotKeepAnOldProofFresh() {
-        final long captured = 123_000_000L;
-        assertTrue(Raytrace.fresh(captured, captured + 149_999_999L, 50));
-        assertFalse(Raytrace.fresh(captured, captured + 150_000_000L, 50));
-        assertFalse(Raytrace.fresh(captured, captured + 500_000_000L, Integer.MAX_VALUE));
-        assertTrue(new Raytrace.Capture(new byte[] {1, 1, 1, 1}, new int[] {4}).fullyOccluded());
-        assertFalse(new Raytrace.Capture(new byte[] {1, 0, 1, 1}, new int[] {4}).fullyOccluded());
+    void checkScheduleLeavesTimeForRenewalWithoutExtendingProofTtl() {
+        final long ms = TimeUnit.MILLISECONDS.toNanos(1);
+        final long captured = 123 * ms;
+        assertEquals(50 * ms, Raytrace.checkIntervalNanos(50));
+        assertEquals(166 * ms, Raytrace.checkIntervalNanos(166));
+        assertEquals(500 * ms / 3, Raytrace.checkIntervalNanos(Integer.MAX_VALUE));
+        assertTrue(Raytrace.fresh(captured, captured + 150 * ms - 1, 50));
+        assertFalse(Raytrace.fresh(captured, captured + 150 * ms, 50));
+        assertTrue(Raytrace.fresh(captured, captured + 500 * ms - 1, Integer.MAX_VALUE));
+        assertFalse(Raytrace.fresh(captured, captured + 500 * ms, Integer.MAX_VALUE));
     }
 
     @Test

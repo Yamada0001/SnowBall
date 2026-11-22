@@ -100,6 +100,43 @@ class ExperimentalConfigTestSuite {
     }
 
     @Test
+    void suggestionsAndDescriptionsFollowTheEffectiveValues() throws Exception {
+        assertEquals(List.of("true", "false"), ExperimentalConfig.valueSuggestions("async.parallel-sensors.enable"));
+        assertTrue(ExperimentalConfig.valueSuggestions("async.parallel-sensors.max-threads").isEmpty());
+        String key = "network.raytrace-entity-culling.max-trace-distance";
+        Path file = directory.resolve("effective.yml");
+        try {
+            ExperimentalConfig.createIfMissing(file);
+            String template = Files.readString(file);
+            Files.writeString(file, template.replace("max-trace-distance: 64", "max-trace-distance: 256"));
+            ExperimentalConfig.load(file, false);
+            assertEquals("160 [saved: 256]", ExperimentalConfig.describe(key));
+            Files.writeString(file, template.replace("max-trace-distance: 64", "max-trace-distance: 192")
+                .replace("    visibility-timeout-ms: 1000", ""));
+            ExperimentalConfig.load(file, true);
+            assertEquals("160 [saved: 192]", ExperimentalConfig.describe(key));
+            assertEquals("1000", ExperimentalConfig.describe("network.raytrace-entity-culling.visibility-timeout-ms"));
+            ExperimentalConfig.saveSetting(file, key, "96");
+            assertEquals("160 (96 after restart)", ExperimentalConfig.describe(key));
+        } finally {
+            ExperimentalConfig.load(directory.resolve("defaults.yml"), false);
+        }
+    }
+
+    @Test
+    void unknownEntityTypesAreReportedAndIgnoredWithoutDisablingCulling() {
+        YamlConfiguration yaml = new YamlConfiguration();
+        yaml.set("network.raytrace-entity-culling.enabled", true);
+        yaml.set("network.raytrace-entity-culling.skipped-entity-types", List.of("Villagr", "Villager"));
+        var warnings = new ArrayList<String>();
+        var config = ExperimentalConfig.parse(yaml, 4, false, "minecraft:villager"::equals, warnings::add);
+        assertTrue(config.culling().enabled());
+        assertEquals(List.of("minecraft:villager"), config.culling().skippedEntityTypes());
+        assertEquals(1, warnings.size());
+        assertTrue(warnings.getFirst().contains("unknown entity type minecraft:villagr"));
+    }
+
+    @Test
     void commandWritePreservesCommentsAndReloadDoesNotApplyPendingValues() throws Exception {
         Path file = directory.resolve(ExperimentalConfig.FILE);
         try {

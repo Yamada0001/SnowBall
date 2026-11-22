@@ -4,7 +4,6 @@ import org.jetbrains.annotations.NotNull;
 import org.snowballmc.snowball.bot.ServerBot;
 import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
 import org.snowballmc.snowball.entity.bot.actions.CraftSneakAction;
-import org.snowballmc.snowball.event.bot.BotActionStopEvent;
 
 public class ServerSneakAction extends AbstractStateBotAction<ServerSneakAction> {
 
@@ -23,8 +22,8 @@ public class ServerSneakAction extends AbstractStateBotAction<ServerSneakAction>
     }
 
     @Override
-    public void stop(@NotNull ServerBot bot, BotActionStopEvent.Reason reason) {
-        super.stop(bot, reason);
+    protected void finishStop(@NotNull ServerBot bot) {
+        super.finishStop(bot);
         bot.setShiftKeyDown(false);
     }
 

@@ -13,10 +13,14 @@ import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
 import org.snowballmc.snowball.entity.bot.actions.CraftRotationAction;
 
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
+import java.util.Locale;
 
 public class ServerRotationAction extends AbstractBotAction<ServerRotationAction> {
 
-    private static final DecimalFormat DF = new DecimalFormat("0.00");
+    private static String formatAngle(float angle) {
+        return new DecimalFormat("0.00", DecimalFormatSymbols.getInstance(Locale.ROOT)).format(angle);
+    }
 
     public ServerRotationAction() {
         super("rotation");
@@ -25,7 +29,7 @@ public class ServerRotationAction extends AbstractBotAction<ServerRotationAction
                 CommandSender sender = context.getSender();
                 if (sender instanceof Entity entity) {
                     builder.suggest(
-                        DF.format(entity.getYaw()),
+                        formatAngle(entity.getYaw()),
                         Component.literal("current player yaw")
                     );
                 }
@@ -36,7 +40,7 @@ public class ServerRotationAction extends AbstractBotAction<ServerRotationAction
                 CommandSender sender = context.getSender();
                 if (sender instanceof Entity entity) {
                     builder.suggest(
-                        DF.format(entity.getPitch()),
+                        formatAngle(entity.getPitch()),
                         Component.literal("current player pitch")
                     );
                 }
@@ -76,8 +80,8 @@ public class ServerRotationAction extends AbstractBotAction<ServerRotationAction
 
     @Override
     public String getActionDataString(@NotNull ExtraData data) {
-        data.add("yaw", DF.format(this.yaw));
-        data.add("pitch", DF.format(this.pitch));
+        data.add("yaw", formatAngle(this.yaw));
+        data.add("pitch", formatAngle(this.pitch));
         return super.getActionDataString(data);
     }
 

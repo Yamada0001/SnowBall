@@ -17,12 +17,15 @@ jobs:
         with:
           script: |
             const issue = context.payload.issue;
-            if (!issue.labels.some(label => label.name === 'status: needs triage')) return;
+            // Both Bug Report and Not Vanilla use the bug label and the same version field.
+            if (!issue.labels.some(label => label.name === 'bug')) return;
 
-            const section = (issue.body ?? '').split(/\r?\n### /).find(part =>
-              part.startsWith('服务端版本 SnowBall Version\n') ||
-              part.startsWith('服务端版本 SnowBall Version\r\n'));
-            const reported = section?.match(/\bSnowBall version ([0-9][0-9A-Za-z._+-]*?)-([1-9][0-9]*)-[^\s@]+@([0-9a-f]{7,40})(?![0-9A-Za-z])/i);
+            const lines = (issue.body ?? '').split(/\r?\n/);
+            const heading = lines.findIndex(line => line.trimEnd() === '### 服务端版本 SnowBall Version');
+            if (heading === -1) return;
+            const nextHeading = lines.findIndex((line, index) => index > heading && /^#{1,6}\s/.test(line));
+            const section = lines.slice(heading + 1, nextHeading === -1 ? undefined : nextHeading).join('\n');
+            const reported = section.match(/\bSnowBall version ([0-9][0-9A-Za-z._+-]*?)-([1-9][0-9]*)-[^\s@]+@([0-9a-f]{7,40})(?![0-9A-Za-z])/i);
             if (!reported) return;
             const [, game, build, commit] = reported;
             const releases = await github.paginate(github.rest.repos.listReleases, {

@@ -1,7 +1,9 @@
 package org.snowballmc.snowball.experimental.culling;
 
+import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,6 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -172,9 +175,65 @@ class EntityCullingIntegrationTest {
         }
     }
 
+    @Test
+    void aLongCheckIntervalRenewsFromNewCaptureButNeverExtendsAStaleProof() throws ReflectiveOperationException {
+        final Fixture fixture = new Fixture();
+        final Entity target = fixture.target(Entity.class);
+        final CullingWorker worker = mock(CullingWorker.class);
+        final long ms = TimeUnit.MILLISECONDS.toNanos(1);
+        final AtomicLong now = new AtomicLong();
+        final BitSet hidden = new BitSet();
+        hidden.set(0);
+        final var renewal = new CompletableFuture<BitSet>();
+        final var late = new CompletableFuture<BitSet>();
+        when(worker.submit(eq(1), anyList()))
+            .thenReturn(CompletableFuture.completedFuture(hidden)).thenReturn(renewal).thenReturn(late);
+
+        try (final var config = mockStatic(ExperimentalConfig.class);
+             final var manager = new EntityCullingManager(worker, now::get)) {
+            config.when(ExperimentalConfig::current).thenReturn(settings(true, 10_000));
+            assertFalse(manager.shouldCull(fixture.player, target));
+            manager.tick(fixture.player); // Capture #1 at 0 ms.
+            now.set(50 * ms);
+            manager.tick(fixture.player);
+            assertTrue(manager.shouldCull(fixture.player, target));
+            now.set(150 * ms);
+            manager.tick(fixture.player);
+            verify(worker).submit(eq(1), anyList());
+
+            now.set(200 * ms);
+            manager.tick(fixture.player); // Capture #2 with the configured 10s shortened only for scheduling.
+            verify(worker, times(2)).submit(eq(1), anyList());
+            assertTrue(manager.shouldCull(fixture.player, target), "pending renewal does not invalidate a fresh certificate");
+            now.set(250 * ms);
+            renewal.complete(hidden);
+            manager.tick(fixture.player);
+            now.set(400 * ms);
+            manager.tick(fixture.player); // Capture #3 stays pending past the expiry of #2.
+            verify(worker, times(3)).submit(eq(1), anyList());
+
+            now.set(500 * ms);
+            assertTrue(manager.shouldCull(fixture.player, target), "the new certificate survives the first certificate's expiry");
+            now.set(700 * ms - 1);
+            assertTrue(manager.shouldCull(fixture.player, target));
+            now.set(700 * ms);
+            assertFalse(manager.shouldCull(fixture.player, target), "expiry is measured from capture, not acceptance or refresh");
+
+            now.set(900 * ms);
+            late.complete(hidden);
+            manager.tick(fixture.player);
+            assertFalse(manager.shouldCull(fixture.player, target), "a worker result at its hard expiry cannot hide the entity");
+            verify(worker).cancel(late);
+        }
+    }
+
     private static ExperimentalConfig.Settings settings(final boolean skipInvisibleStands) {
+        return settings(skipInvisibleStands, 10);
+    }
+
+    private static ExperimentalConfig.Settings settings(final boolean skipInvisibleStands, final int intervalMs) {
         return new ExperimentalConfig.Settings(null, null,
-            new ExperimentalConfig.Culling(true, 1, 10, 64, 1.0, 0, 0.25, 20, true, skipInvisibleStands, List.of()));
+            new ExperimentalConfig.Culling(true, 1, intervalMs, 64, 1.0, 0, 0.25, 20, true, skipInvisibleStands, List.of()));
     }
 
     private static final class Fixture {

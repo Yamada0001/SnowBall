@@ -10,6 +10,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -41,11 +42,21 @@ public final class EntityCullingManager implements AutoCloseable {
     private static final double POSE_MARGIN = 0.25;
     private static final int MAX_LATENCY_MS = 200;
 
-    private final CullingWorker worker = new CullingWorker();
+    private final CullingWorker worker;
+    private final LongSupplier nanoTime;
     private volatile boolean closed;
     private int budgetTick;
     private int chunkBudget;
     private int cellBudget;
+
+    public EntityCullingManager() {
+        this(new CullingWorker(), System::nanoTime);
+    }
+
+    EntityCullingManager(final CullingWorker worker, final LongSupplier nanoTime) {
+        this.worker = worker;
+        this.nanoTime = nanoTime;
+    }
 
     public static boolean enabled() {
         return ExperimentalConfig.current().culling().enabled();
@@ -115,7 +126,7 @@ public final class EntityCullingManager implements AutoCloseable {
         pair.lastDemand = observer.round;
         final Proof proof = pair.proof;
         if (proof != null) {
-            final long now = System.nanoTime();
+            final long now = this.nanoTime.getAsLong();
             if (proof.valid(player, pair, config, now)) {
                 return true;
             }
@@ -166,7 +177,7 @@ public final class EntityCullingManager implements AutoCloseable {
             return;
         }
         ++observer.round;
-        final long now = System.nanoTime();
+        final long now = this.nanoTime.getAsLong();
         if (observer.pending != null && !Raytrace.fresh(observer.pending.captured, now, config.checkIntervalMs())) {
             worker.cancel(observer.pending.result);
             observer.pending = null;
@@ -228,7 +239,7 @@ public final class EntityCullingManager implements AutoCloseable {
             }
         }
         observer.scheduled = true;
-        observer.nextCheck = now + TimeUnit.MILLISECONDS.toNanos(config.checkIntervalMs());
+        observer.nextCheck = now + Raytrace.checkIntervalNanos(config.checkIntervalMs());
     }
 
     private static void accept(final ServerPlayer player, final Observer observer, final Culling config, final long now) {

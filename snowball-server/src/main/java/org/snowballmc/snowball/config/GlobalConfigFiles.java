@@ -9,9 +9,11 @@ import org.snowballmc.snowball.util.LeavesUpdateHelper;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
@@ -53,8 +55,14 @@ public record GlobalConfigFiles(Path leavesPath, Path snowballPath, YamlConfigur
 
     public static YamlConfiguration read(Path path, String header) throws IOException, InvalidConfigurationException {
         YamlConfiguration yaml = newYaml(header);
-        if (Files.exists(path)) {
-            yaml.load(path.toFile());
+        Reader reader;
+        try {
+            reader = Files.newBufferedReader(path, StandardCharsets.UTF_8);
+        } catch (NoSuchFileException ignored) {
+            return yaml;
+        }
+        try (reader) {
+            yaml.load(reader);
         }
         return yaml;
     }
@@ -80,7 +88,7 @@ public record GlobalConfigFiles(Path leavesPath, Path snowballPath, YamlConfigur
             target.options().setFooter(mergeComments(target.options().getFooter(), source.options().getFooter()));
             saveAtomically(destination, target);
             // Keep the old file as a backup, but stop treating it as a migration source on every boot.
-            Path backup = backUp(legacy);
+            backUp(legacy);
             Files.delete(legacy);
         }
         return requested;
@@ -114,12 +122,35 @@ public record GlobalConfigFiles(Path leavesPath, Path snowballPath, YamlConfigur
         return snowballKey ? snowball : leaves;
     }
 
+    void saveKey(boolean snowballKey, String path, Object value, GlobalConfig config) throws IOException, InvalidConfigurationException {
+        Path file = snowballKey ? snowballPath : leavesPath;
+        YamlConfiguration current = read(file, snowballKey ? "Configuration file for SnowBall." : LeavesConfig.CONFIG_HEADER);
+        for (int separator = path.indexOf('.'); separator >= 0; separator = path.indexOf('.', separator + 1)) {
+            String parent = path.substring(0, separator);
+            if (current.contains(parent, true) && !current.isConfigurationSection(parent)) {
+                throw new InvalidConfigurationException("Cannot update " + path + ": " + parent + " is not a section");
+            }
+        }
+        current.set(path, value);
+        addDefaultComments(current, path, config);
+        saveAtomically(file, current);
+
+        // Unrelated on-disk edits remain pending until reload; publish only the committed key.
+        owner(snowballKey).set(path, value);
+    }
+
     public void migrate(List<String> snowballKeys) throws IOException {
+        migrate(snowballKeys, List.of());
+    }
+
+    void migrate(List<String> snowballKeys, List<String> transferPaths) throws IOException {
         boolean migrating = leaves.contains(REMOVED_WEB_PATH, true)
             || (leaves.contains(UPDATE_SOURCE, true) && !LeavesUpdateHelper.DOWNLOAD_REPOSITORY.equals(leaves.get(UPDATE_SOURCE)))
             || leaves.getComments(UPDATE_SOURCE).contains(OLD_SOURCE_COMMENT)
-            || snowballKeys.stream().anyMatch(path -> leaves.contains(path, true));
-        if (migrating && Files.exists(leavesPath)) {
+            || snowballKeys.stream().anyMatch(path -> leaves.contains(path, true))
+            // A legacy alias can be removed by either a transfer or pruning.
+            || transferPaths.stream().anyMatch(path -> leaves.contains(path, true));
+        if (migrating && !Files.notExists(leavesPath)) {
             backUp(leavesPath);
         }
         for (String path : snowballKeys) {
@@ -199,10 +230,18 @@ public record GlobalConfigFiles(Path leavesPath, Path snowballPath, YamlConfigur
         saveAtomically(snowballKey ? snowballPath : leavesPath, owner(snowballKey));
     }
 
-    private static Path backUp(Path source) throws IOException {
+    private static void backUp(Path source) throws IOException {
         Path backup = Files.createTempFile(source.toAbsolutePath().getParent(), source.getFileName() + ".migration-", ".bak");
-        Files.copy(source, backup, StandardCopyOption.REPLACE_EXISTING);
-        return backup;
+        try {
+            Files.copy(source, backup, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException failure) {
+            try {
+                Files.deleteIfExists(backup);
+            } catch (IOException cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+            throw failure;
+        }
     }
 
     private static void saveAtomically(Path path, YamlConfiguration yaml) throws IOException {

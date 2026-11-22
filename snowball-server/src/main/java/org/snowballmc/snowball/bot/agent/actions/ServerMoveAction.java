@@ -8,7 +8,6 @@ import org.snowballmc.snowball.command.arguments.EnumArgumentType;
 import org.snowballmc.snowball.entity.bot.action.MoveAction.MoveDirection;
 import org.snowballmc.snowball.entity.bot.actions.CraftBotAction;
 import org.snowballmc.snowball.entity.bot.actions.CraftMoveAction;
-import org.snowballmc.snowball.event.bot.BotActionStopEvent;
 
 public class ServerMoveAction extends AbstractStateBotAction<ServerMoveAction> {
     private MoveDirection direction = MoveDirection.FORWARD;
@@ -24,8 +23,8 @@ public class ServerMoveAction extends AbstractStateBotAction<ServerMoveAction> {
     }
 
     @Override
-    public void stop(@NotNull ServerBot bot, BotActionStopEvent.Reason reason) {
-        super.stop(bot, reason);
+    protected void finishStop(@NotNull ServerBot bot) {
+        super.finishStop(bot);
         switch (direction) {
             case FORWARD, BACKWARD -> bot.zza = 0.0f;
             case LEFT, RIGHT -> bot.xxa = 0.0f;

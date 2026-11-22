@@ -22,8 +22,8 @@ import java.util.Set;
 public final class GlobalConfigManager {
     public static final String CONFIG_START = "settings.";
 
-    private static Map<String, VerifiedConfig> verifiedConfigs = Map.of();
-    private static final Map<String, Object> defaults = new LinkedHashMap<>();
+    private static volatile Map<String, VerifiedConfig> verifiedConfigs = Map.of();
+    private static Map<String, Object> defaults = Map.of();
 
     private GlobalConfigManager() {
     }
@@ -40,35 +40,45 @@ public final class GlobalConfigManager {
         load(files, entries(files), reload);
     }
 
-    static void load(GlobalConfigFiles files, List<VerifiedConfig> entries, boolean reload) throws IOException {
-        files.migrate(entries.stream().filter(VerifiedConfig::snowball).map(VerifiedConfig::path).toList());
-        Map<String, VerifiedConfig> verified = new LinkedHashMap<>();
-        if (!reload) {
-            defaults.clear();
-            for (VerifiedConfig entry : entries) {
-                defaults.put(entry.path(), entry.validator().saveConvert(entry.get()));
+    static synchronized void load(GlobalConfigFiles files, List<VerifiedConfig> entries, boolean reload) throws IOException {
+        List<String> transferPaths = new ArrayList<>();
+        for (VerifiedConfig entry : entries) {
+            for (TransferConfig transfer : entry.field().getAnnotationsByType(TransferConfig.class)) {
+                transferPaths.add(CONFIG_START + transfer.value());
             }
         }
+        files.migrate(entries.stream().filter(VerifiedConfig::snowball).map(VerifiedConfig::path).toList(), transferPaths);
+
+        Map<String, VerifiedConfig> verified = new LinkedHashMap<>();
+        Map<String, Object> stagedDefaults = reload ? defaults : new LinkedHashMap<>();
+        if (!reload) {
+            for (VerifiedConfig entry : entries) {
+                stagedDefaults.put(entry.path(), entry.validator().saveConvert(entry.get()));
+            }
+        }
+        Map<VerifiedConfig, Object> runtimeValues = new LinkedHashMap<>();
         for (VerifiedConfig entry : entries) {
-            loadValue(entry, files.leaves(), defaults.get(entry.path()), reload);
+            Object value = loadValue(entry, files.leaves(), stagedDefaults.get(entry.path()));
+            if (!reload || !entry.lock()) {
+                runtimeValues.put(entry, value);
+            }
             verified.put(entry.path().substring(CONFIG_START.length()), entry);
         }
         prune(files.leaves(), entries, false);
         prune(files.snowball(), entries, true);
-        for (VerifiedConfig entry : entries) {
-            if (!reload || !entry.lock()) {
-                entry.validator().runAfterLoader(entry.get(), reload);
-            }
-        }
         files.save();
+
+        runtimeValues.forEach(VerifiedConfig::applyValue);
+        defaults = stagedDefaults;
         verifiedConfigs = Collections.unmodifiableMap(verified);
+        runtimeValues.forEach((entry, value) -> entry.validator().onApplied(null, value));
+        runtimeValues.keySet().forEach(entry -> entry.validator().runAfterLoader(entry.get(), reload));
     }
 
-    private static void loadValue(VerifiedConfig entry, YamlConfiguration legacy, Object defaultValue, boolean reload) {
+    private static Object loadValue(VerifiedConfig entry, YamlConfiguration legacy, Object defaultValue) {
         String path = entry.path();
         YamlConfiguration yaml = entry.configuration();
-        boolean apply = !reload || !entry.lock();
-        if (apply && !yaml.contains(path, true)) {
+        if (!yaml.contains(path, true)) {
             for (TransferConfig transfer : entry.field().getAnnotationsByType(TransferConfig.class)) {
                 if (VerifiedTransferConfig.build(transfer, entry.field(), entry.upstreamField()).run(legacy, yaml, path, entry.validator())) {
                     break;
@@ -78,24 +88,16 @@ public final class GlobalConfigManager {
         if (!yaml.contains(path, true)) {
             yaml.set(path, defaultValue);
         }
-        if (apply) {
-            try {
-                Object value = entry.validator().loadConvert(yaml.get(path));
-                entry.validator().verify(null, value);
-                entry.field().set(entry.upstreamField(), value);
-            } catch (IllegalArgumentException | ClassCastException e) {
-                yaml.set(path, defaultValue);
-                try {
-                    entry.field().set(entry.upstreamField(), entry.validator().loadConvert(defaultValue));
-                } catch (IllegalAccessException impossible) {
-                    throw new IllegalStateException("Cannot reset " + path, impossible);
-                }
-                LeavesLogger.LOGGER.warn("{}, reset to {}", e.getMessage(), defaultValue);
-            } catch (IllegalAccessException e) {
-                throw new IllegalStateException("Cannot load " + path, e);
-            }
-        }
         GlobalConfigFiles.addDefaultComments(yaml, path, entry.field().getAnnotation(GlobalConfig.class));
+        try {
+            Object value = entry.checkedValue(entry.validator().loadConvert(yaml.get(path)));
+            entry.validator().verify(null, value);
+            return value;
+        } catch (IllegalArgumentException | ClassCastException e) {
+            yaml.set(path, defaultValue);
+            LeavesLogger.LOGGER.warn("Invalid configuration {}: {}, reset to {}", path, e.getMessage(), defaultValue);
+            return entry.checkedValue(entry.validator().loadConvert(defaultValue));
+        }
     }
 
     static List<VerifiedConfig> entries(GlobalConfigFiles files) {

@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Reset world TPS pacing on empty pause
+
+Break the sample window only when the coordinator deliberately skips world
+ticks. A slow active tick remains part of world tick pacing.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1652,6 +1652,7 @@
+                     task.run();
+                 }
+                 for (final ServerLevel level : this.levels.values()) {
++                    level.snowball$resetWorldTickPacingForEmptyPause(); // SnowBall - experimental TPS bar
+                     // process unloads
+                     level.getChunkSource().tick(() -> true, false);
+                 }
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -986,6 +986,13 @@
+         return pacing == null ? null : pacing.average(now, targetInterval);
+     }
+ 
++    // SnowBall - coordinator only, in the empty-pause branch that skips world tick dispatch.
++    public void snowball$resetWorldTickPacingForEmptyPause() {
++        if (this.snowball$worldTickPacing != null) {
++            this.snowball$worldTickPacing.resetForEmptyPause();
++        }
++    }
++
+     @Override
+     public boolean shouldTickBlocksAt(final long chunkPos) {
+         // Paper start - rewrite chunk system

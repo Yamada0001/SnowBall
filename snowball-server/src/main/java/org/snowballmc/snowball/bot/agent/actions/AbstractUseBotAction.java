@@ -7,7 +7,6 @@ import org.jetbrains.annotations.NotNull;
 import org.snowballmc.snowball.bot.ServerBot;
 import org.snowballmc.snowball.bot.agent.ExtraData;
 import org.snowballmc.snowball.command.CommandContext;
-import org.snowballmc.snowball.event.bot.BotActionStopEvent;
 
 import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 
@@ -130,8 +129,8 @@ public abstract class AbstractUseBotAction<T extends AbstractUseBotAction<T>> ex
     }
 
     @Override
-    public void stop(@NotNull ServerBot bot, BotActionStopEvent.Reason reason) {
-        super.stop(bot, reason);
+    protected void finishStop(@NotNull ServerBot bot) {
+        super.finishStop(bot);
         bot.releaseUsingItem();
     }
 }

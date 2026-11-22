@@ -1,9 +1,9 @@
 name: 空白 Issue | Blank Issue
-description: 
-  一个空白的 issue 模板。
-  A blank issue template.
+description:
+  用于提问或提交不适合其他表单的问题。
+  Ask a question or open an issue that does not fit the other forms.
 labels:
-  - "status: needs triage"
+  - question
 
 body:
   - type: textarea
