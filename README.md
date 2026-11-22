@@ -50,3 +50,11 @@ dependencies {
 The Maven version naming convention does not determine the upstream Paper release channel. Releases are distributed via GitHub; remote Maven publishing is opt-in via `snowballMavenUrl` and the `SNOWBALL_MAVEN_USERNAME` and `SNOWBALL_MAVEN_PASSWORD` environment variables.
 
 Run `./gradlew :snowball-api:test :snowball-server:test` to verify your changes. See [Contributing](docs/CONTRIBUTING.md) for the patch workflow and [LICENSE](LICENSE.md) for licensing and upstream attribution.
+
+## Credits
+
+<p align="center">
+  <img src="docs/snowball-credits.svg" width="840" alt="SnowBall credits: built on Leaves, feature ports from EtheriumMC, and 19 upstream mods reviewed — 8 ported, 3 already upstream, 5 declined, 3 deferred.">
+</p>
+
+Each ported optimization names its source mod in the patch header. Porting rules and per-mod evidence are in [optimization-mod-porting-spec.md](docs/optimization-mod-porting-spec.md).
