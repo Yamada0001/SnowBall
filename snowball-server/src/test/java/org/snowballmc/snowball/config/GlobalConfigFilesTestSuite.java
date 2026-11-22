@@ -59,6 +59,7 @@ class GlobalConfigFilesTestSuite {
         "settings.performance.optimize-chunk-packet-construction",
         "settings.performance.skip-inventory-change-without-listeners",
         "settings.performance.optimize-mob-spawning",
+        "settings.performance.biome-spy",
         "settings.fix.fix-skeleton-horse-trap-goal",
         "settings.fix.propagate-block-destruction-cancellation",
         "settings.async.async-mob-spawning.enabled",
@@ -91,6 +92,7 @@ class GlobalConfigFilesTestSuite {
         assertTrue(files.leaves().contains("settings.modify.snowball-and-egg-can-knockback-player"));
         assertTrue(files.snowball().getBoolean("settings.performance.skip-generic-game-event-without-listeners"));
         assertFalse(files.snowball().getBoolean("settings.async.async-mob-spawning.enabled"));
+        assertFalse(files.snowball().getBoolean("settings.performance.biome-spy"));
         String pathfinding = "settings.async.async-pathfinding.";
         assertFalse(files.snowball().getBoolean(pathfinding + "enabled"));
         assertEquals(0, files.snowball().getInt(pathfinding + "max-threads"));

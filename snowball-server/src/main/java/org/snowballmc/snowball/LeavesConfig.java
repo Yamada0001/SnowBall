@@ -1172,6 +1172,11 @@ public final class LeavesConfig {
         })
         public boolean optimizeMobSpawning = false;
 
+        @GlobalConfig(value = "biome-spy", snowball = true, lock = true, comment = {
+            "实验性：复用多噪声生物群系查找中不随高度变化的气候采样，不改变搜索半径或顺序。默认关闭，修改后需重启。"
+        })
+        public boolean biomeSpy = false;
+
         public PerformanceRemoveConfig remove = new PerformanceRemoveConfig();
 
         @GlobalConfigCategory("remove")

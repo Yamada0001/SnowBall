@@ -1,0 +1,295 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Optimize biome column sampling
+
+Independent 26.3 implementation inspired by MoePus's BiomeSpy 26.1
+(LGPL-3.0-or-later), MoePus/BiomeSpy@77249eff02fb7cf9e971108309cfd2337753fe22.
+Reuse only climate samples, not R-tree results. Defer column sampling
+until a locate scan has passed its initial points. For multi-row Nether
+preset structure columns, retain the compiler's volume evaluations but
+avoid materializing rows already broadcast by a compiled Y slice. Leave
+storage checks alone.
+
+diff --git a/net/minecraft/world/level/biome/BiomeSource.java b/net/minecraft/world/level/biome/BiomeSource.java
+--- a/net/minecraft/world/level/biome/BiomeSource.java
++++ b/net/minecraft/world/level/biome/BiomeSource.java
+@@ -68,9 +68,13 @@
+             return null;
+         }
+ 
+-        BiomeResolver resolver = this.createCachingResolver(randomState);
++        // SnowBall start - BiomeSpy: keep the original query sampler when switching resolvers.
++        Climate.Sampler sampler = randomState.createClimateSampler(SamplerContext.builder().enableCaches().build());
++        BiomeResolver resolver = this.createResolver(sampler);
+         int sampleRadius = Math.floorDiv(searchRadius, sampleResolutionHorizontal);
+         int[] sampleYs = Mth.outFromOrigin(origin.getY(), level.getMinY() + 1, level.getMaxY() + 1, sampleResolutionVertical).toArray();
++        int pointsUntilColumnSampling = sampleRadius > 0 && sampleYs.length > 1 ? 32 : 0;
++        // SnowBall end - BiomeSpy
+ 
+         for (BlockPos.MutableBlockPos sampleColumn : BlockPos.spiralAround(BlockPos.ZERO, sampleRadius, Direction.EAST, Direction.SOUTH)) {
+             int blockX = origin.getX() + sampleColumn.getX() * sampleResolutionHorizontal;
+@@ -85,6 +89,15 @@
+                     return Pair.of(new BlockPos(blockX, blockY, blockZ), biome);
+                 }
+             }
++            // SnowBall start - BiomeSpy: check once, after at least 32 points and only between columns.
++            if (pointsUntilColumnSampling > 0 && (pointsUntilColumnSampling -= sampleYs.length) <= 0) {
++                if (org.snowballmc.snowball.LeavesConfig.performance.biomeSpy
++                    && this.getClass() == MultiNoiseBiomeSource.class
++                    && BiomeSpyColumnSampler.supportsLocateCoordinates(origin, sampleRadius, sampleResolutionHorizontal, sampleYs)) {
++                    resolver = BiomeSpyColumnSampler.createLocateResolver((MultiNoiseBiomeSource)this, randomState, sampler, resolver);
++                }
++            }
++            // SnowBall end - BiomeSpy
+         }
+ 
+         return null;
+diff --git a/net/minecraft/world/level/biome/BiomeSpyColumnSampler.java b/net/minecraft/world/level/biome/BiomeSpyColumnSampler.java
+new file mode 100644
+--- /dev/null
++++ b/net/minecraft/world/level/biome/BiomeSpyColumnSampler.java
+@@ -0,0 +1,165 @@
++package net.minecraft.world.level.biome;
++
++import java.util.Collections;
++import java.util.IdentityHashMap;
++import java.util.Set;
++import net.minecraft.core.BlockPos;
++import net.minecraft.core.QuartPos;
++import net.minecraft.world.level.levelgen.NoiseRouter;
++import net.minecraft.world.level.levelgen.RandomState;
++import net.minecraft.world.level.levelgen.densityfunction.DensityBuffer;
++import net.minecraft.world.level.levelgen.densityfunction.DensityFunction;
++import net.minecraft.world.level.levelgen.densityfunction.DensityFunctions;
++import net.minecraft.world.level.levelgen.densityfunction.DensitySampler;
++import net.minecraft.world.level.levelgen.densityfunction.DensityVolume;
++import net.minecraft.world.level.levelgen.densityfunction.DfRewriteRule;
++import net.minecraft.world.level.levelgen.densityfunction.generator.ConstantFunction;
++import net.minecraft.world.level.levelgen.densityfunction.generator.GradientFunction;
++import net.minecraft.world.level.levelgen.densityfunction.generator.NoiseFunction;
++import net.minecraft.world.level.levelgen.densityfunction.generator.ShiftNoiseFunction;
++import net.minecraft.world.level.levelgen.densityfunction.generator.SimpleDensityFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.BinaryFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.CacheFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.LerpFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.SliceFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.SplineFunction;
++import net.minecraft.world.level.levelgen.densityfunction.op.UnaryFunction;
++import org.jspecify.annotations.Nullable;
++
++/** SnowBall's 26.3 implementation, inspired by MoePus's BiomeSpy (LGPL-3.0-or-later). */
++public final class BiomeSpyColumnSampler {
++    private BiomeSpyColumnSampler() {
++    }
++
++    static boolean supportsLocateCoordinates(final BlockPos origin, final int sampleRadius, final int horizontalStep, final int[] sampleYs) {
++        // Avoid changing aliasing in SamplerContext's packed-coordinate scalar cache.
++        long reach = (long)sampleRadius * horizontalStep;
++        if (reach < 0 || Math.abs((long)origin.getX()) + reach > BlockPos.MAX_HORIZONTAL_COORDINATE
++            || Math.abs((long)origin.getZ()) + reach > BlockPos.MAX_HORIZONTAL_COORDINATE) {
++            return false;
++        }
++        for (int y : sampleYs) {
++            int blockY = QuartPos.toBlock(QuartPos.fromBlock(y));
++            if (BlockPos.getY(BlockPos.asLong(0, blockY, 0)) != blockY) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    static BiomeResolver createLocateResolver(
++        final MultiNoiseBiomeSource source, final RandomState randomState, final Climate.Sampler sampler, final BiomeResolver fallback
++    ) {
++        NoiseRouter router = randomState.snowball$biomeSpyRouter();
++        DensityFunction[] functions = {router.temperature(), router.vegetation(), router.continents(), router.erosion(), router.depth(), router.ridges()};
++        ScalarGraphCheck check = new ScalarGraphCheck();
++        int invariantAxes = 0;
++        for (int i = 0; i < functions.length; i++) {
++            check.rewrite(functions[i]);
++            if (!check.supported) {
++                return fallback;
++            }
++            if ((functions[i].domainAxes() & DensityFunction.AXIS_Y) == 0) {
++                invariantAxes |= 1 << i;
++            }
++        }
++        if (invariantAxes == 0) {
++            return fallback;
++        }
++
++        ScalarColumn column = new ScalarColumn(sampler, invariantAxes);
++        // Do not memoize the biome. The Moonrise R-tree uses its previous leaf to break ties.
++        return (quartX, quartY, quartZ) -> source.getNoiseBiome(column.sample(quartX, quartY, quartZ));
++    }
++
++    private static final class ScalarGraphCheck implements DfRewriteRule {
++        private final Set<DensityFunction> visited = Collections.newSetFromMap(new IdentityHashMap<>());
++        private boolean supported = true;
++
++        @Override
++        public DensityFunction rewrite(final DensityFunction function) {
++            if (!this.supported || !this.visited.add(function)) {
++                return function;
++            }
++            // Only these known scalar-only graphs may share the query's cache. For example, an
++            // interpolator can populate a volume that a subsequent scalar lookup then consumes.
++            switch (function) {
++                case DensityFunctions.HolderHolder _, CacheFunction _, NoiseFunction _, BinaryFunction _,
++                     LerpFunction _, SplineFunction _, UnaryFunction _ -> function.rewriteChildren(this);
++                case ConstantFunction _, GradientFunction _, ShiftNoiseFunction.Shift _,
++                     ShiftNoiseFunction.ShiftA _, ShiftNoiseFunction.ShiftB _, SimpleDensityFunction _ -> {
++                }
++                default -> this.supported = false;
++            }
++            return function;
++        }
++    }
++
++    private static final class ScalarColumn {
++        private final DensitySampler.Bound[] samplers;
++        private final int invariantAxes;
++        private final long[] values = new long[6];
++        private int quartX = Integer.MIN_VALUE;
++        private int quartZ;
++
++        private ScalarColumn(final Climate.Sampler sampler, final int invariantAxes) {
++            this.samplers = new DensitySampler.Bound[]{
++                sampler.temperature(), sampler.humidity(), sampler.continentalness(), sampler.erosion(), sampler.depth(), sampler.weirdness()
++            };
++            this.invariantAxes = invariantAxes;
++        }
++
++        private Climate.TargetPoint sample(final int quartX, final int quartY, final int quartZ) {
++            boolean sameColumn = this.quartX == quartX && this.quartZ == quartZ;
++            int blockX = QuartPos.toBlock(quartX);
++            int blockY = QuartPos.toBlock(quartY);
++            int blockZ = QuartPos.toBlock(quartZ);
++            for (int i = 0; i < this.samplers.length; i++) {
++                if (!sameColumn || (this.invariantAxes & (1 << i)) == 0) {
++                    this.values[i] = Climate.quantizeCoord(this.samplers[i].sampleValue(blockX, blockY, blockZ));
++                }
++            }
++            this.quartX = quartX;
++            this.quartZ = quartZ;
++            return new Climate.TargetPoint(this.values[0], this.values[1], this.values[2], this.values[3], this.values[4], this.values[5]);
++        }
++    }
++
++    public static BiomeResolver createVolumeResolver(
++        final MultiNoiseBiomeSource source, final Climate.Sampler sampler, final int quartX, final int minQuartY, final int quartZ, final int quartSizeY
++    ) {
++        DensityVolume volume = new DensityVolume(1, quartSizeY, 1, QuartPos.toBlock(quartX), QuartPos.toBlock(minQuartY), QuartPos.toBlock(quartZ), 4, 4, 4);
++        VolumeAxis temperature = VolumeAxis.sample(sampler.temperature(), volume);
++        VolumeAxis humidity = VolumeAxis.sample(sampler.humidity(), volume);
++        VolumeAxis continentalness = VolumeAxis.sample(sampler.continentalness(), volume);
++        VolumeAxis erosion = VolumeAxis.sample(sampler.erosion(), volume);
++        VolumeAxis depth = VolumeAxis.sample(sampler.depth(), volume);
++        VolumeAxis weirdness = VolumeAxis.sample(sampler.weirdness(), volume);
++        return (x, y, z) -> {
++            int index = volume.indexUnchecked(x - quartX, y - minQuartY, z - quartZ);
++            return source.getNoiseBiome(Climate.target(
++                temperature.get(index), humidity.get(index), continentalness.get(index), erosion.get(index), depth.get(index), weirdness.get(index)
++            ));
++        };
++    }
++
++    private record VolumeAxis(@Nullable DensityBuffer buffer, float uniformValue) {
++        private static VolumeAxis sample(final DensitySampler.Bound sampler, final DensityVolume volume) {
++            // Only bypass broadcasting where the compiled sampler proves it. Neither a different
++            // volume shape nor sampleValue is generally bit-equivalent to sampleVolume.
++            if (sampler.sampler() instanceof SliceFunction.YSampler slice) {
++                return new VolumeAxis(null, slice.snowball$sampleColumnVolume(sampler.context(), volume));
++            }
++            if (sampler.sampler() instanceof ConstantFunction.Sampler constant) {
++                return new VolumeAxis(null, constant.value());
++            }
++            DensityBuffer buffer = DensityBuffer.createUnpooled(volume.size());
++            sampler.sampleVolume(buffer, volume);
++            return new VolumeAxis(buffer, 0.0F);
++        }
++
++        private float get(final int index) {
++            return this.buffer == null ? this.uniformValue : this.buffer.get(index);
++        }
++    }
++}
+diff --git a/net/minecraft/world/level/levelgen/RandomState.java b/net/minecraft/world/level/levelgen/RandomState.java
+--- a/net/minecraft/world/level/levelgen/RandomState.java
++++ b/net/minecraft/world/level/levelgen/RandomState.java
+@@ -117,6 +117,10 @@
+         return this.router.createClimateSampler(this.samplersWithContext(context));
+     }
+ 
++    public NoiseRouter snowball$biomeSpyRouter() {
++        return this.router;
++    }
++
+     public Noise getOrCreateNoise(final ResourceKey<NormalNoise> noise) {
+         return this.noiseInstances.computeIfAbsent(noise, key -> Noises.instantiate(this.noises, this.random, noise));
+     }
+diff --git a/net/minecraft/world/level/levelgen/densityfunction/op/SliceFunction.java b/net/minecraft/world/level/levelgen/densityfunction/op/SliceFunction.java
+--- a/net/minecraft/world/level/levelgen/densityfunction/op/SliceFunction.java
++++ b/net/minecraft/world/level/levelgen/densityfunction/op/SliceFunction.java
+@@ -176,6 +176,23 @@
+                 }
+             }
+         }
++
++        // SnowBall start - BiomeSpy
++        // Identical to sampling a 1xNx1 volume and reading any row, without broadcasting the value.
++        public float snowball$sampleColumnVolume(final SamplerContext context, final DensityVolume volume) {
++            if (volume.sizeX() != 1 || volume.sizeZ() != 1 || volume.sizeY() <= 1) {
++                throw new IllegalArgumentException("Expected a multi-row column");
++            }
++            DensityVolume inputVolume = new DensityVolume(
++                1, 1, 1, volume.minBlockX(), this.y, volume.minBlockZ(),
++                volume.stepBlockX(), volume.stepBlockY(), volume.stepBlockZ()
++            );
++            try (ScopedDensityBuffer inputBuffer = context.acquireBuffer(inputVolume)) {
++                this.input.sampleVolume(context, inputBuffer, inputVolume);
++                return inputBuffer.get(0);
++            }
++        }
++        // SnowBall end - BiomeSpy
+ 
+         @Override
+         public float sampleValue(final SamplerContext context, final int blockX, final int blockY, final int blockZ) {
+diff --git a/net/minecraft/world/level/levelgen/structure/Structure.java b/net/minecraft/world/level/levelgen/structure/Structure.java
+--- a/net/minecraft/world/level/levelgen/structure/Structure.java
++++ b/net/minecraft/world/level/levelgen/structure/Structure.java
+@@ -32,7 +32,10 @@
+ import net.minecraft.world.level.biome.Biome;
+ import net.minecraft.world.level.biome.BiomeResolver;
+ import net.minecraft.world.level.biome.BiomeSource;
++import net.minecraft.world.level.biome.BiomeSpyColumnSampler;
+ import net.minecraft.world.level.biome.Climate;
++import net.minecraft.world.level.biome.MultiNoiseBiomeSource;
++import net.minecraft.world.level.biome.MultiNoiseBiomeSourceParameterLists;
+ import net.minecraft.world.level.block.Rotation;
+ import net.minecraft.world.level.chunk.ChunkGenerator;
+ import net.minecraft.world.level.levelgen.GenerationStep;
+@@ -271,8 +274,20 @@
+             int quartZ = QuartPos.fromBlock(blockZ);
+             int minQuartY = QuartPos.fromBlock(minBlockY);
+             int maxQuartY = QuartPos.fromBlock(maxBlockY);
+-            BiomeResolver columnResolver = this.biomeSource
+-                .createResolverForChunk(this.climateSampler, quartX, minQuartY, quartZ, 1, maxQuartY - minQuartY + 1, 1);
++            int quartSizeY = maxQuartY - minQuartY + 1;
++            BiomeResolver columnResolver;
++            // SnowBall start - BiomeSpy
++            if (quartSizeY > 1
++                && org.snowballmc.snowball.LeavesConfig.performance.biomeSpy
++                && this.biomeSource.getClass() == MultiNoiseBiomeSource.class
++                && ((MultiNoiseBiomeSource)this.biomeSource).stable(MultiNoiseBiomeSourceParameterLists.NETHER)) {
++                columnResolver = BiomeSpyColumnSampler.createVolumeResolver(
++                    (MultiNoiseBiomeSource)this.biomeSource, this.climateSampler, quartX, minQuartY, quartZ, quartSizeY
++                );
++            } else {
++                columnResolver = this.biomeSource.createResolverForChunk(this.climateSampler, quartX, minQuartY, quartZ, 1, quartSizeY, 1);
++            }
++            // SnowBall end - BiomeSpy
+ 
+             for (int quartY = minQuartY; quartY <= maxQuartY; quartY++) {
+                 if (this.validBiome.test(columnResolver.getNoiseBiome(quartX, quartY, quartZ))) {
