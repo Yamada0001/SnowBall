@@ -54,7 +54,7 @@ Run `./gradlew :snowball-api:test :snowball-server:test` to verify your changes.
 ## Credits
 
 <p align="center">
-  <img src="docs/snowball-credits.svg" width="840" alt="SnowBall credits: built on Leaves, feature ports from EtheriumMC, and 19 upstream mods reviewed — 8 ported, 3 already upstream, 5 declined, 3 deferred.">
+  <img src="docs/snowball-credits.svg" width="840" alt="SnowBall credits: Leaves is the server base, Leaf contributed ports and design ideas, and EtheriumMC inspired independent culling and sensor experiments. Of 19 mods reviewed, 8 were ported, 3 were covered upstream, 5 were not ported, and 3 were deferred.">
 </p>
 
-Each ported optimization names its source mod in the patch header. Porting rules and per-mod evidence are in [optimization-mod-porting-spec.md](docs/optimization-mod-porting-spec.md).
+Sources: [Leaves](https://github.com/LeavesMC/Leaves) · [Leaf](https://github.com/Winds-Studio/Leaf) · [EtheriumMC](https://github.com/deivaxxx/EtheriumMC) · [19-mod review and porting details](docs/optimization-mod-porting-spec.md#47-最终裁决总表v13).
