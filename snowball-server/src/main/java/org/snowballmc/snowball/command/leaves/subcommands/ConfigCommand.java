@@ -12,7 +12,10 @@ import org.snowballmc.snowball.command.CommandUtils;
 import org.snowballmc.snowball.command.leaves.LeavesSubcommand;
 import org.snowballmc.snowball.config.GlobalConfigManager;
 import org.snowballmc.snowball.config.VerifiedConfig;
+import org.snowballmc.snowball.experimental.ExperimentalConfig;
 
+import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.concurrent.CompletableFuture;
 
 import static net.kyori.adventure.text.Component.join;
@@ -39,7 +42,13 @@ public class ConfigCommand extends LeavesSubcommand {
             String path = context.getArgumentOrDefault(PathArgument.class, "");
             int dotIndex = path.lastIndexOf(".");
             builder = builder.createOffset(builder.getInput().lastIndexOf(' ') + dotIndex + 2);
-            CommandUtils.getListClosestMatchingLast(path.substring(dotIndex + 1), GlobalConfigManager.getVerifiedConfigSubPaths(path))
+            var candidates = new LinkedHashSet<>(GlobalConfigManager.getVerifiedConfigSubPaths(path));
+            String prefix = path.substring(0, dotIndex + 1);
+            for (String experimental : ExperimentalConfig.keys()) {
+                String name = "experimental." + experimental;
+                if (name.startsWith(prefix)) candidates.add(name.substring(prefix.length()).split("\\.", 2)[0]);
+            }
+            CommandUtils.getListClosestMatchingLast(path.substring(dotIndex + 1), candidates)
                 .forEach(builder::suggest);
             return builder.buildFuture();
         }
@@ -47,6 +56,10 @@ public class ConfigCommand extends LeavesSubcommand {
         @Override
         protected boolean execute(@NotNull CommandContext context) {
             String path = context.getArgument(PathArgument.class);
+            if (path.startsWith("experimental.") && ExperimentalConfig.keys().contains(path.substring("experimental.".length()))) {
+                context.getSender().sendMessage(text(path + ": " + ExperimentalConfig.describe(path.substring("experimental.".length())), AQUA));
+                return true;
+            }
             VerifiedConfig verifiedConfig = getVerifiedConfig(context);
             if (verifiedConfig == null) {
                 return false;
@@ -96,9 +109,19 @@ public class ConfigCommand extends LeavesSubcommand {
 
         @Override
         protected boolean execute(@NotNull CommandContext context) {
-            VerifiedConfig verifiedConfig = PathArgument.getVerifiedConfig(context);
             String path = context.getArgument(PathArgument.class);
             String value = context.getArgument(ValueArgument.class);
+            if (path.startsWith("experimental.")) {
+                try {
+                    ExperimentalConfig.saveSetting(Path.of("config", ExperimentalConfig.FILE), path.substring("experimental.".length()), value);
+                    context.getSender().sendMessage(text(path + " saved to " + ExperimentalConfig.FILE + "; restart required", AQUA));
+                    return true;
+                } catch (java.io.IOException | org.bukkit.configuration.InvalidConfigurationException | IllegalArgumentException failure) {
+                    context.getSender().sendMessage(text("Could not save " + path + ": " + failure.getMessage(), RED));
+                    return false;
+                }
+            }
+            VerifiedConfig verifiedConfig = PathArgument.getVerifiedConfig(context);
             if (verifiedConfig == null) {
                 return false;
             }

@@ -69,6 +69,7 @@ public final class LeavesConfig {
             File leavesFile = GlobalConfigFiles.prepareLeavesFile(file);
             configFiles = GlobalConfigFiles.load(leavesFile.toPath(), Path.of("config", GlobalConfigFiles.SNOWBALL_FILE));
             GlobalConfigManager.init(configFiles);
+            org.snowballmc.snowball.experimental.ExperimentalConfig.load(Path.of("config", org.snowballmc.snowball.experimental.ExperimentalConfig.FILE), false);
         } catch (IOException | InvalidConfigurationException e) {
             throw new IllegalStateException("Unable to load Leaves and SnowBall configuration files", e);
         }
@@ -81,6 +82,7 @@ public final class LeavesConfig {
             GlobalConfigFiles updated = GlobalConfigFiles.load(configFiles.leavesPath(), configFiles.snowballPath());
             GlobalConfigManager.reload(updated);
             configFiles = updated;
+            org.snowballmc.snowball.experimental.ExperimentalConfig.load(Path.of("config", org.snowballmc.snowball.experimental.ExperimentalConfig.FILE), true);
         } catch (IOException | InvalidConfigurationException e) {
             throw new IllegalStateException("Unable to reload Leaves and SnowBall configuration files", e);
         }

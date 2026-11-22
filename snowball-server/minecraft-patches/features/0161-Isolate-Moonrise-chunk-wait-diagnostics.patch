@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Isolate Moonrise chunk wait diagnostics per thread
+
+Keep nested records in the waiting thread's own stack. Give watchdog
+readers a snapshot across all waiting threads, and clear the record on
+exceptional exit. This does not change which thread loads chunks.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -55,6 +55,7 @@
+ import java.util.ArrayDeque;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+@@ -890,23 +891,30 @@
+-    public static final ArrayDeque<ChunkInfo> WAITING_CHUNKS = new ArrayDeque<>(); // stack
++    // SnowBall - Keep nested waits in their own thread's LIFO stack.
++    private static final Map<Thread, ArrayDeque<ChunkInfo>> WAITING_CHUNKS = new LinkedHashMap<>();
+
+     public static final class ChunkInfo {
+
+         public final int chunkX;
+         public final int chunkZ;
+         public final ServerLevel world;
++        public final long threadId;
++        public final String threadName;
+
+         public ChunkInfo(final int chunkX, final int chunkZ, final ServerLevel world) {
+             this.chunkX = chunkX;
+             this.chunkZ = chunkZ;
+             this.world = world;
++            this.threadId = Thread.currentThread().threadId();
++            this.threadName = Thread.currentThread().getName();
+         }
+
+         public JsonObject toJson() {
+             final JsonObject ret = new JsonObject();
+
+             ret.addProperty("chunk-x", Integer.valueOf(this.chunkX));
+             ret.addProperty("chunk-z", Integer.valueOf(this.chunkZ));
+             ret.addProperty("world-name", WorldUtil.getWorldName(this.world));
++            ret.addProperty("thread-id", this.threadId);
++            ret.addProperty("thread-name", this.threadName);
+
+             return ret;
+         }
+@@ -914,23 +922,33 @@
+         @Override
+         public String toString() {
+-            return "[( " + this.chunkX + "," + this.chunkZ + ") in '" + WorldUtil.getWorldName(this.world) + "']";
++            return "[( " + this.chunkX + "," + this.chunkZ + ") in '" + WorldUtil.getWorldName(this.world)
++                + "', waiting thread '" + this.threadName + "' (" + this.threadId + ")]";
+         }
+     }
+
+-    public static void pushChunkWait(final ServerLevel world, final int chunkX, final int chunkZ) {
++    public static void runWithChunkWait(final ServerLevel world, final int chunkX, final int chunkZ, final Runnable wait) {
++        final Thread thread = Thread.currentThread();
++        final ArrayDeque<ChunkInfo> stack;
+         synchronized (WAITING_CHUNKS) {
+-            WAITING_CHUNKS.push(new ChunkInfo(chunkX, chunkZ, world));
++            stack = WAITING_CHUNKS.computeIfAbsent(thread, ignored -> new ArrayDeque<>());
++            stack.push(new ChunkInfo(chunkX, chunkZ, world));
+         }
+-    }
+-
+-    public static void popChunkWait() {
+-        synchronized (WAITING_CHUNKS) {
+-            WAITING_CHUNKS.pop();
++        try {
++            wait.run();
++        } finally {
++            synchronized (WAITING_CHUNKS) {
++                stack.pop();
++                if (stack.isEmpty()) {
++                    WAITING_CHUNKS.remove(thread);
++                }
++            }
+         }
+     }
+
+     public static ChunkInfo[] getChunkInfos() {
+         synchronized (WAITING_CHUNKS) {
+-            return WAITING_CHUNKS.toArray(new ChunkInfo[0]);
++            final List<ChunkInfo> snapshot = new ArrayList<>();
++            WAITING_CHUNKS.values().forEach(snapshot::addAll);
++            return snapshot.toArray(ChunkInfo[]::new);
+         }
+     }
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -124,8 +124,7 @@
+
+         if (ca.spottedleaf.moonrise.common.util.TickThread.isTickThreadFor(this.level, chunkX, chunkZ)) {
+-            ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.pushChunkWait(this.level, chunkX, chunkZ);
+-            this.mainThreadProcessor.managedBlock(completable::isDone);
+-            ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.popChunkWait();
++            ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler.runWithChunkWait(this.level, chunkX, chunkZ,
++                () -> this.mainThreadProcessor.managedBlock(completable::isDone));
+         }
+
+         final ChunkAccess ret = completable.join();

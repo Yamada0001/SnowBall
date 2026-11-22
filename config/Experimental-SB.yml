@@ -1,0 +1,67 @@
+# SnowBall 实验功能配置。三项功能默认关闭；修改后需要重启服务器。
+# 键、层级和初始值以战略书所钉定的 DivineMC 配置源码为对照；中文注释说明运行语义和移植限制。
+# Fish 的 async.world-ticking 是另一套实现，不作为本文件的别名；详见战略书。
+
+async:
+  # DivineMC 会同时启用世界并行与区块区域并行，并改写两边的线程数；少于 6 个可用 CPU 时忽略。
+  # 本次不移植区域并行。SnowBall 若读到 true，必须明确警告并让世界并行保持禁用，不能静默改变含义。
+  auto-thread-allocation: false
+
+  # 专家模式。上游还要求 JVM 参数 -Ddivinemc.async.guru=true；仅配置此值不生效。
+  guru-mode-enable: false
+  guru-mode:
+    # Parallel Sensor Phase 工作者允许绑定的 CPU 编号列表；空列表不绑定，不影响其他线程池。
+    # 需要专家模式和系统属性同时启用；平台不支持或列表无效时，必须记录原因，不得声称绑定成功。
+    parallel-sensors-affinity: []
+
+  parallel-world-ticking:
+    # 不同世界可并行处理各自的整轮 tick；当前轮所有世界结束后才进入下一轮。
+    # 当前版本只交付串行基线观测，尚不支持世界所有权转移；即便设为 true，世界也仍在主线程 tick。
+    enable: false
+    # 同时执行世界 tick 的上限，不是世界数量。DivineMC 默认 4；手动模式要求正整数。
+    thread-count: 4
+    # 记录容器创建的调用栈，用于定位跨线程容器问题；持续开启会增加诊断开销。
+    log-container-creation-stacktraces: false
+    # 上游用于关闭部分线程归属异常；存在世界数据损坏风险。
+    # SnowBall 安全门槛：保留同名键，但不允许它关闭世界线程检查；true 必须明确警告并让世界并行保持禁用。
+    disable-hard-throw: false
+    # 允许 /tpsbar 显示当前世界的统计；SnowBall 不引入整个 Purpur，仅接所需显示功能。
+    use-per-world-tps-bar: true
+    # 上一项启用时，此项 true 显示全服 TPS，false 显示当前世界 TPS。
+    show-tps-of-server-instead-of-world: true
+
+  parallel-sensors:
+    # 在实体 tick 前并行执行已审计的 AI 感知工作；未纳入白名单的传感器继续原同步流程。
+    enable: false
+    # 正数直接使用；0 = max(可用 CPU 核数 / 4 向下取整, 1)；负数 = max(可用 CPU 核数 + 值, 1)。
+    # 原注释把 <=0 一起描述为四分之一，但负值实际走减核分支；按执行逻辑兼容。
+    max-threads: 0
+
+network:
+  raytrace-entity-culling:
+    # 只改变观察者的实体追踪/定位栏，不删除实体或暂停实体 tick；不能覆盖插件的隐藏规则。
+    # 只有确认完全被遮挡时才隐藏。视线恢复后重新配对；高延迟玩家可能看到实体稍晚出现。
+    enabled: false
+    # 所有玩家共享线程池；正数直接使用，<=0 时取可用 CPU 核数 / 8 向下取整并限制在 1–4。
+    threads: 0
+    # 每位玩家两次可见性检查的间隔（毫秒），执行时至少 10。降低会缩短重现延迟，但增大工作量。
+    check-interval-ms: 50
+    # 射线检测最大距离（方块），执行时限制在 16–160；更远的实体不由本功能隐藏。
+    # 上游每位观察者的遮挡缓存约占 (2×距离)^3/4 字节；64 时约 512 KiB，不含其他开销。
+    max-trace-distance: 64
+    # 半径内始终通过本功能的可见性检查，不作射线检测（方块）。
+    force-visible-radius: 4.0
+    # 实体被证实可见后，维持可见的最短时间（毫秒），避免反复配对/取消配对。
+    visibility-timeout-ms: 1000
+    # 射线检测前向外扩张实体包围盒的距离（方块）；值越大，拐角处越早恢复可见。
+    aabb-expansion: 0.5
+    # 任一维度超过此大小的包围盒不被剔除（方块）。
+    bounding-box-limit: 20
+    # 是否也处理普通玩家；高延迟 PvP 场景需单独测拐角重现时机。
+    cull-players: true
+    # 上游实际匹配的是隐形盔甲架，不额外要求 Marker 标记；常用于全息或插件标记。
+    skip-marker-armor-stands: true
+    # 附加豁免实体类型，如 [minecraft:item_frame, minecraft:villager]。
+    # 大小写归一化；未带 minecraft: 前缀的按原规则补齐；未知类型告警。
+    # 发光、常显自定义名称、展示实体与鱼漂等原生豁免不由此列表关闭。
+    skipped-entity-types: []

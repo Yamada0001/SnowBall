@@ -1,0 +1,231 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowballMC <noreply@snowballmc.org>
+Date: Sat, 21 Nov 2026 12:00:00 +0000
+Subject: [PATCH] Add experimental raytrace entity culling
+
+Motivated by EtheriumMC 0074 (8b670c2b) as described in the port
+strategy. Independent implementation: a voxel-plane certificate covers
+all rays between bounded eye and target regions. No upstream raytracer,
+AntiXray SDK, or third-party code is imported.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -288,6 +288,7 @@
+     private int emptyTicks;
+     private volatile boolean isSaving;
+     private final SuppressedExceptionCollector suppressedExceptions = new SuppressedExceptionCollector();
++    public final org.snowballmc.snowball.experimental.culling.EntityCullingManager snowballEntityCulling = new org.snowballmc.snowball.experimental.culling.EntityCullingManager(); // SnowBall - raytrace entity culling
+     private final DiscontinuousFrame tickFrame;
+     private final PacketProcessor packetProcessor;
+     public final org.snowballmc.snowball.pathfinding.PathSearchExecutor leavesPathSearch = new org.snowballmc.snowball.pathfinding.PathSearchExecutor(); // Leaves - Bounded async pathfinding
+@@ -1009,6 +1010,7 @@
+         if (Thread.currentThread() == this.serverThread) this.executeAllRecentInternalTasks(); // Paper - execute tasks on stop
+         // CraftBukkit start - prevent double stopping on multiple threads
+         synchronized (this.stopLock) {
+             if (this.hasStopped) return;
+             this.hasStopped = true;
++            this.snowballEntityCulling.close(); // SnowBall - raytrace entity culling
+             if (this.naturalSpawnCountExecutor != null) {
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -1029,6 +1029,7 @@
+     protected void removeEntity(final Entity entity) {
+         org.spigotmc.AsyncCatcher.catchOp("entity untrack"); // Spigot
+         if (entity instanceof ServerPlayer player) {
++            this.level.getServer().snowballEntityCulling.forget(player); // SnowBall - raytrace entity culling
+             this.updatePlayerStatus(player, false);
+ 
+             for (ChunkMap.TrackedEntity trackedEntity : this.entityMap.values()) {
+@@ -1437,6 +1438,9 @@
+                     visibleToPlayer = false;
+                 }
+                 // CraftBukkit end
++                if (visibleToPlayer && ChunkMap.this.level.getServer().snowballEntityCulling.shouldCull(player, this.entity)) { // SnowBall - raytrace entity culling
++                    visibleToPlayer = false;
++                }
+                 if (visibleToPlayer) {
+                     if (this.seenBy.add(player.connection)) {
+                         // Paper start - entity tracking events
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -234,6 +234,7 @@
+     );
+     private static final boolean DEFAULT_SEEN_CREDITS = false;
+     private static final boolean DEFAULT_SPAWN_EXTRA_PARTICLES_ON_FALL = false;
+     public ServerGamePacketListenerImpl connection;
++    public org.snowballmc.snowball.experimental.culling.EntityCullingManager.@Nullable Observer snowball$cullingObserver; // SnowBall - raytrace entity culling
+     private final MinecraftServer server;
+     public ServerPlayerGameMode gameMode; // Leaves - not final
+@@ -913,6 +914,12 @@
+                 ((org.bukkit.craftbukkit.CraftWorldBorder) this.getBukkitEntity().getWorldBorder()).getHandle().tick();
+             }
+             // CraftBukkit end
++            // SnowBall start - raytrace entity culling
++            if (org.snowballmc.snowball.experimental.culling.EntityCullingManager.enabled()) {
++                this.level().getServer().snowballEntityCulling.tick(this);
++                this.level().getWaypointManager().snowball$refreshCulling(this);
++            }
++            // SnowBall end - raytrace entity culling
+         // Leaves start - update suppression crash fix
+         } catch (org.snowballmc.snowball.util.UpdateSuppressionException exception) {
+             exception.providePlayer(this);
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -1962,6 +1962,10 @@
+         this.internalTeleport(new PositionMoveRotation(new Vec3(x, y, z), Vec3.ZERO, yRot, xRot), Collections.emptySet());
+     }
+ 
++    public boolean snowball$isAwaitingCullingTeleport() { // SnowBall - raytrace entity culling
++        return this.awaitingPositionFromClient != null;
++    }
++
+     public void internalTeleport(PositionMoveRotation destination, Set<Relative> relatives) {
+         org.spigotmc.AsyncCatcher.catchOp("teleport"); // Paper
+         // Paper start - Prevent teleporting dead entities
+@@ -1985,6 +1989,7 @@
+             this.awaitingTeleport = 0;
+         }
+ 
++        this.server.snowballEntityCulling.forget(this.player); // SnowBall - raytrace entity culling
+         this.player.teleportSetPosition(destination, relatives);
+         this.awaitingPositionFromClient = this.player.position();
+         // CraftBukkit start - update last location
+diff --git a/net/minecraft/server/waypoints/ServerWaypointManager.java b/net/minecraft/server/waypoints/ServerWaypointManager.java
+--- a/net/minecraft/server/waypoints/ServerWaypointManager.java
++++ b/net/minecraft/server/waypoints/ServerWaypointManager.java
+@@ -18,6 +18,8 @@
+ public class ServerWaypointManager implements WaypointManager<WaypointTransmitter> {
+     private final Set<WaypointTransmitter> waypoints = new HashSet<>();
+     private final Set<ServerPlayer> players = new HashSet<>();
++    private final com.google.common.collect.SetMultimap<ServerPlayer, WaypointTransmitter> snowball$culledWaypoints =
++        com.google.common.collect.HashMultimap.create(); // SnowBall - raytrace entity culling
+     private final Table<ServerPlayer, WaypointTransmitter, WaypointTransmitter.Connection> connections = HashBasedTable.create();
+     // Paper start - optimize ServerWaypointManager with locator bar disabled
+     public boolean locatorBarEnabled; // Avoid a gamerule lookup for each player
+@@ -60,6 +62,7 @@
+     }
+ 
+     @Override
+     public void untrackWaypoint(final WaypointTransmitter waypoint) {
++        this.snowball$culledWaypoints.values().removeIf(waypoint::equals); // SnowBall - raytrace entity culling
+         this.connections.column(waypoint).forEach((player, connection) -> connection.disconnect());
+         Tables.transpose(this.connections).row(waypoint).clear();
+@@ -101,6 +104,7 @@
+ 
+     public void removePlayer(final ServerPlayer player) {
++        this.snowball$culledWaypoints.removeAll(player); // SnowBall - raytrace entity culling
+         this.connections.row(player).values().removeIf(connection -> {
+             connection.disconnect();
+             return true;
+         });
+@@ -128,12 +132,59 @@
+     // Avoid a gamerule lookup for each player
+     private boolean isLocatorBarEnabledFor(final ServerPlayer player) {
+         return locatorBarEnabled;
+     // Paper end - optimize ServerWaypointManager with locator bar disabled
+     }
+ 
++    // SnowBall start - raytrace entity culling
++    public void snowball$refreshCulling(final ServerPlayer player) {
++        if (!this.locatorBarEnabled || !this.players.contains(player) || player.isRemoved()
++            || Thread.currentThread() != player.level().getServer().getRunningThread()) {
++            return;
++        }
++        // Refresh only suppressed waypoints or existing connections with new occlusion evidence;
++        // ordinary locator updates retain their native cadence.
++        if (this.snowball$culledWaypoints.containsKey(player)) {
++            for (final WaypointTransmitter waypoint : java.util.List.copyOf(this.snowball$culledWaypoints.get(player))) {
++                if (!this.snowball$cullWaypoint(player, waypoint) && this.waypoints.contains(waypoint)) {
++                    this.createConnection(player, waypoint);
++                }
++            }
++        }
++        player.level().getServer().snowballEntityCulling.forEachOccludedWaypoint(player, waypoint -> {
++            final WaypointTransmitter.Connection existing = this.connections.get(player, waypoint);
++            if (existing != null && this.snowball$cullWaypoint(player, waypoint)) {
++                this.connections.remove(player, waypoint);
++                existing.disconnect();
++            }
++        });
++    }
++
++    private boolean snowball$cullWaypoint(final ServerPlayer player, final WaypointTransmitter waypoint) {
++        if (!org.snowballmc.snowball.experimental.culling.EntityCullingManager.enabled()) {
++            return false;
++        }
++        final boolean hidden = waypoint instanceof net.minecraft.world.entity.LivingEntity entity
++            && !WaypointTransmitter.doesSourceIgnoreReceiver(entity, player)
++            && player.level().getServer().snowballEntityCulling.shouldCull(player, entity);
++        if (hidden) {
++            this.snowball$culledWaypoints.put(player, waypoint);
++        } else {
++            this.snowball$culledWaypoints.remove(player, waypoint);
++        }
++        return hidden;
++    }
++    // SnowBall end - raytrace entity culling
++
+     private void createConnection(final ServerPlayer player, final WaypointTransmitter waypoint) {
+         if (player != waypoint) {
+             if (isLocatorBarEnabledFor(player)) {
++                if (this.snowball$cullWaypoint(player, waypoint)) { // SnowBall - raytrace entity culling
++                    final WaypointTransmitter.Connection old = this.connections.remove(player, waypoint);
++                    if (old != null) {
++                        old.disconnect();
++                    }
++                    return;
++                }
+                 waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(connection -> {
+                     this.connections.put(player, waypoint, connection);
+                     connection.connect();
+@@ -150,7 +201,10 @@
+     private void updateConnection(final ServerPlayer player, final WaypointTransmitter waypoint, final WaypointTransmitter.Connection connection) {
+         if (player != waypoint) {
+             if (isLocatorBarEnabledFor(player)) {
+-                if (!connection.isBroken()) {
++                if (this.snowball$cullWaypoint(player, waypoint)) { // SnowBall - raytrace entity culling
++                    connection.disconnect();
++                    this.connections.remove(player, waypoint);
++                } else if (!connection.isBroken()) {
+                     connection.update();
+                 } else {
+                     waypoint.makeWaypointConnectionWith(player).ifPresentOrElse(newConnection -> {
+diff --git a/net/minecraft/world/level/chunk/LevelChunk.java b/net/minecraft/world/level/chunk/LevelChunk.java
+--- a/net/minecraft/world/level/chunk/LevelChunk.java
++++ b/net/minecraft/world/level/chunk/LevelChunk.java
+@@ -86,6 +86,7 @@
+     };
+     private final Map<BlockPos, LevelChunk.RebindableTickingBlockEntityWrapper> tickersInLevel = Maps.newHashMap();
+     private boolean loaded;
++    private volatile long snowball$cullingRevision; // SnowBall - raytrace entity culling
+     private final ServerLevel level; // CraftBukkit - type
+     private @Nullable Supplier<FullChunkStatus> fullStatus;
+     private LevelChunk.@Nullable PostLoadProcessor postLoad;
+@@ -367,6 +368,10 @@
+         */ // Paper - Perf: Optimise Chunk#getFluid
+     }
+ 
++    public long snowball$cullingRevision() { // SnowBall - raytrace entity culling
++        return this.snowball$cullingRevision;
++    }
++
+     @Override
+     public @Nullable BlockState setBlockState(final BlockPos pos, final BlockState state, final @Block.UpdateFlags int flags) {
+         // Leaves start - rail optimization
+@@ -387,6 +392,12 @@
+             return null;
+         }
+ 
++        // SnowBall start - raytrace entity culling: invalidate even when notification is suppressed.
++        if (org.snowballmc.snowball.experimental.culling.EntityCullingManager.enabled()
++            && org.snowballmc.snowball.experimental.culling.EntityCullingManager.opaque(oldState)
++                != org.snowballmc.snowball.experimental.culling.EntityCullingManager.opaque(state)) {
++            ++this.snowball$cullingRevision;
++        } // SnowBall end - raytrace entity culling
+         Block newBlock = state.getBlock(); try { // Leaves start - update suppression crash fix
+         this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING).update(localX, y, localZ, state);
+         this.heightmaps.get(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES).update(localX, y, localZ, state);

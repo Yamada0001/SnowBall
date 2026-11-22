@@ -2,6 +2,7 @@ package org.snowballmc.snowball.config;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.snowballmc.snowball.config.annotations.GlobalConfig;
+import org.snowballmc.snowball.experimental.ExperimentalConfig;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -26,5 +27,6 @@ public final class GlobalConfigCreator {
         }
         files.leaves().set("settings.protocol.xaero-map-server-id", 0);
         files.save();
+        ExperimentalConfig.createIfMissing(directory.resolve(ExperimentalConfig.FILE));
     }
 }

@@ -1,0 +1,98 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sat, 21 Nov 2026 12:00:00 +0000
+Subject: [PATCH] Record serial world tick durations
+
+Keep world ownership and tick order unchanged. Record dimension, server tick,
+and completion status via an explicitly enabled JFR event for serial baseline
+measurements. Duration is world work in milliseconds per tick, not TPS. The
+recording is independent of the parallel-world-ticking configuration.
+
+Whole-world parallelism is blocked by Paper's synchronous event contract,
+Moonrise's main-thread executors, static hopper event flags and synchronous
+writes to destination worlds during portal transitions. Do not bypass them.
+
+With JFR available, enable the event explicitly:
+  jcmd <pid> JFR.start name=world-ticks filename=world-ticks.jfr duration=60s +snowball.WorldTick#enabled=true
+Leave it disabled in normal recordings.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -1828,9 +1828,20 @@
+             profiler.push(() -> level + " " + level.dimension().identifier());
+             profiler.push("tick");
+ 
+             try {
+-                level.tick(haveTime);
++                // SnowBall start - observe serial world tick time
++                final ProfiledDuration worldTick = JvmProfiler.INSTANCE.onWorldTick(level.dimension(), this.tickCount);
++                boolean completed = false;
++                try {
++                    level.tick(haveTime);
++                    completed = true;
++                } finally {
++                    if (worldTick != null) {
++                        worldTick.finish(completed);
++                    }
++                }
++                // SnowBall end - observe serial world tick time
+             // Leaves start - update suppression crash fix
+             } catch (org.snowballmc.snowball.util.UpdateSuppressionException exception) {
+                 exception.provideLevel(level);
+                 exception.consume();
+diff --git a/net/minecraft/util/profiling/jfr/JfrProfiler.java b/net/minecraft/util/profiling/jfr/JfrProfiler.java
+--- a/net/minecraft/util/profiling/jfr/JfrProfiler.java
++++ b/net/minecraft/util/profiling/jfr/JfrProfiler.java
+@@ -50,6 +50,7 @@
+ import net.minecraft.world.level.levelgen.structure.Structure;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
++import org.snowballmc.snowball.experimental.world.WorldTickEvent; // SnowBall - observe serial world tick time
+ 
+ public class JfrProfiler implements JvmProfiler {
+     private static final Logger LOGGER = LogUtils.getLogger();
+@@ -68,7 +69,8 @@
+         ServerTickTimeEvent.class,
+         ClientFpsEvent.class,
+         StructureGenerationEvent.class,
+-        WorldLoadFinishedEvent.class
++        WorldLoadFinishedEvent.class,
++        WorldTickEvent.class // SnowBall - observe serial world tick time
+     );
+     private static final String FLIGHT_RECORDER_CONFIG = "/flightrecorder-config.jfc";
+     private static final DateTimeFormatter DATE_TIME_FORMATTER = new DateTimeFormatterBuilder()
+@@ -282,6 +284,17 @@
+         return ignored -> event.commit();
+     }
+ 
++    // SnowBall start - observe serial world tick time
++    @Override
++    public @Nullable ProfiledDuration onWorldTick(final ResourceKey<Level> dimension, final int serverTick) {
++        if (!WorldTickEvent.isRecordingEnabled()) {
++            return null;
++        }
++        final WorldTickEvent event = new WorldTickEvent(dimension.identifier().toString(), serverTick);
++        event.begin();
++        return event::finish;
++    }
++    // SnowBall end - observe serial world tick time
+     @Override
+     public @Nullable ProfiledDuration onChunkGenerate(final ChunkPos pos, final ResourceKey<Level> dimension, final String name) {
+         if (!ChunkGenerationEvent.TYPE.isEnabled()) {
+diff --git a/net/minecraft/util/profiling/jfr/JvmProfiler.java b/net/minecraft/util/profiling/jfr/JvmProfiler.java
+--- a/net/minecraft/util/profiling/jfr/JvmProfiler.java
++++ b/net/minecraft/util/profiling/jfr/JvmProfiler.java
+@@ -31,6 +31,12 @@
+     boolean isAvailable();
+ 
+     void onServerTick(float averageTickTime);
++
++    // SnowBall start - observe serial world tick time
++    default @Nullable ProfiledDuration onWorldTick(final ResourceKey<Level> dimension, final int serverTick) {
++        return null;
++    }
++    // SnowBall end - observe serial world tick time
+ 
+     void onClientTick(int fps);
+ 

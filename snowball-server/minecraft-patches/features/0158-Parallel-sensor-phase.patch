@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowballMC <noreply@snowballmc.org>
+Date: Sat, 21 Nov 2026 16:14:53 +0000
+Subject: [PATCH] Parallel sensor phase for detached distance sorts
+
+Design reference only: EtheriumMC 0073 Parallel sensor phase (deivaxxx,
+Study-MCMCMC/EtheriumMC@8b670c2b6494556e6666373d440e4b3ac137ac42) and
+BX-Team/DivineMC@c2a3e127d98c9d0886635e609bcba74fafb0fd60.
+No upstream implementation is imported; see docs/etheriummc-port-strategy.md.
+
+Only partition the distance sort of the exact NearestLivingEntitySensor and
+NearestItemSensor classes. Keep the original due tick, live query, line of
+sight, mutable TargetingConditions and Brain writes on the owner thread.
+No entity pre-pass: EAR/freeze gating and inter-sensor dependencies remain
+in their original tick path. Unavailable worker results use the original
+sort inline, not a second sensor tick.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -291,6 +291,7 @@
+     private final DiscontinuousFrame tickFrame;
+     private final PacketProcessor packetProcessor;
+     public final org.snowballmc.snowball.pathfinding.PathSearchExecutor leavesPathSearch = new org.snowballmc.snowball.pathfinding.PathSearchExecutor(); // Leaves - Bounded async pathfinding
++    public final org.snowballmc.snowball.experimental.sensors.ParallelSensorPhase snowballSensorPhase = new org.snowballmc.snowball.experimental.sensors.ParallelSensorPhase(); // SnowBall - Parallel sensor phase
+     // Paper - per-level scheduledEvents
+     private final ServerClockManager clockManager;
+ 
+@@ -1021,6 +1022,7 @@
+         // CraftBukkit end
+         this.packetProcessor.close();
+         this.leavesPathSearch.close(); // Leaves - Bounded async pathfinding
++        this.snowballSensorPhase.close(); // SnowBall - Parallel sensor phase
+         if (this.metricsRecorder.isRecording()) {
+             this.cancelRecordingMetrics();
+         }
+diff --git a/net/minecraft/world/entity/ai/sensing/NearestItemSensor.java b/net/minecraft/world/entity/ai/sensing/NearestItemSensor.java
+--- a/net/minecraft/world/entity/ai/sensing/NearestItemSensor.java
++++ b/net/minecraft/world/entity/ai/sensing/NearestItemSensor.java
+@@ -25,7 +25,11 @@
+     protected void doTick(final ServerLevel level, final Mob body) {
+         Brain<?> brain = body.getBrain();
+         List<ItemEntity> items = level.getEntitiesOfClass(ItemEntity.class, body.getBoundingBox().inflate(32.0, 16.0, 32.0), item -> item.closerThan(body, MAX_DISTANCE_TO_WANTED_ITEM) && body.wantsToPickUp(level, item.getItem())); // Paper - Perf: Move predicate into getEntities
+-        items.sort(Comparator.comparingDouble(body::distanceToSqr));
++        // SnowBall start - Parallel sensor phase
++        if (this.getClass() != NearestItemSensor.class || !org.snowballmc.snowball.experimental.sensors.SensorDistanceSort.trySort(level, body, items)) {
++            items.sort(Comparator.comparingDouble(body::distanceToSqr));
++        }
++        // SnowBall end - Parallel sensor phase
+         // Paper start - Perf: remove streams from hot code
+         ItemEntity nearest = null;
+         for (final ItemEntity item : items) {
+diff --git a/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java b/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java
+--- a/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java
++++ b/net/minecraft/world/entity/ai/sensing/NearestLivingEntitySensor.java
+@@ -18,7 +18,11 @@
+         double followRange = body.getAttributeValue(Attributes.FOLLOW_RANGE);
+         AABB boundingBox = body.getBoundingBox().inflate(followRange, followRange, followRange);
+         List<LivingEntity> livingEntities = level.getEntitiesOfClass(LivingEntity.class, boundingBox, mob -> mob != body && mob.isAlive());
+-        livingEntities.sort(Comparator.comparingDouble(body::distanceToSqr));
++        // SnowBall start - Parallel sensor phase; Warden, Breeze and other subclasses stay on the vanilla path
++        if (this.getClass() != NearestLivingEntitySensor.class || !org.snowballmc.snowball.experimental.sensors.SensorDistanceSort.trySort(level, body, livingEntities)) {
++            livingEntities.sort(Comparator.comparingDouble(body::distanceToSqr));
++        }
++        // SnowBall end - Parallel sensor phase
+         Brain<?> brain = body.getBrain();
+         brain.setMemory(MemoryModuleType.NEAREST_LIVING_ENTITIES, livingEntities);
+         brain.setMemory(MemoryModuleType.NEAREST_VISIBLE_LIVING_ENTITIES, new NearestVisibleLivingEntities(level, body, livingEntities));
