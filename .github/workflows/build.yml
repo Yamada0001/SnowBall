@@ -66,6 +66,11 @@ jobs:
         id: meta
         run: bash scripts/GetReleaseInfo.sh
 
+      - name: Verify SnowBall release jar
+        env:
+          ARTIFACT: ${{ steps.meta.outputs.artifact }}
+        run: python3 scripts/VerifyReleaseJar.py "$ARTIFACT"
+
       - name: Write release notes
         env:
           MC_VERSION: ${{ steps.meta.outputs.mc_version }}

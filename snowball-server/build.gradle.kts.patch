@@ -174,7 +174,7 @@
      systemProperty("net.kyori.adventure.text.warnWhenLegacyFormattingDetected", true)
      if (providers.gradleProperty("paper.runDisableWatchdog").getOrElse("false") == "true") {
          systemProperty("disable.watchdog", true)
-@@ -309,25 +_,34 @@
+@@ -309,25 +_,56 @@
      classpath(tasks.createBundlerJar.flatMap { it.outputZip })
      mainClass.set(null as String?)
  }
@@ -186,6 +186,29 @@
 +val releaseGameVersion = rootProject.providers.gradleProperty("mcVersion")
 +val releaseCommit = Git(rootProject.layout.projectDirectory.path)
 +    .exec(providers, "rev-parse", "--short=7", "HEAD").map { it.trim() }
++// Compile the narrow Leavesclip 3.0.10 override against the original launcher, not the server.
++val upstreamLeavesclip = configurations.named("leavesclip")
++val compileLeavesclipFix by tasks.registering(JavaCompile::class) {
++    source(fileTree("src/leavesclip/java"))
++    classpath = upstreamLeavesclip.get()
++    javaCompiler.set(javaToolchains.compilerFor(java.toolchain))
++    options.release.set(21)
++    destinationDirectory.set(layout.buildDirectory.dir("classes/leavesclipFix"))
++}
++val patchedLeavesclip by tasks.registering(Jar::class) {
++    archiveFileName.set("leavesclip-fixed.jar")
++    destinationDirectory.set(layout.buildDirectory.dir("launcher"))
++    from(compileLeavesclipFix)
++    from({ zipTree(upstreamLeavesclip.get().singleFile) }) {
++        exclude("META-INF/MANIFEST.MF", "org/leavesmc/leavesclip/patch/FileEntry.class")
++    }
++    manifest.attributes("Main-Class" to "org.leavesmc.leavesclip.Main")
++    duplicatesStrategy = DuplicatesStrategy.FAIL
++}
++// Leavesweight gets the launcher from the Bundler when assembling the release JAR.
++tasks.createBundlerJar {
++    paperclip.setFrom(patchedLeavesclip.flatMap { it.archiveFile })
++}
 +tasks.createLeavesclipJar {
 +    outputZip.set(layout.buildDirectory.file(releaseGameVersion.zip(releaseCommit) { version, commit ->
 +        "libs/SnowBall-$version-$commit.jar"
