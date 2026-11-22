@@ -69,6 +69,15 @@ index c7fdfd4..419ad2e 100644
      // CraftBukkit start - add fields and methods
      public java.util.List<org.bukkit.entity.HumanEntity> transaction = new java.util.ArrayList<>();
      private int maxStack = MAX_STACK;
+@@ -58,7 +68,7 @@ public class BarrelBlockEntity extends RandomizableContainerBlockEntity implemen
+     }
+     // CraftBukkit end
+     private static final Component DEFAULT_NAME = Component.translatable("container.barrel");
+-    private NonNullList<ItemStack> items = NonNullList.withSize(27, ItemStack.EMPTY);
++    private NonNullList<ItemStack> items = NonNullList.withSize(this.leaves$containerSize, ItemStack.EMPTY); // Leaves - large barrel
+     public final ContainerOpenersCounter openersCounter = new ContainerOpenersCounter() {
+         // Paper start - delay close callbacks
+         @Override
 @@ -127,7 +137,7 @@ public class BarrelBlockEntity extends RandomizableContainerBlockEntity implemen
  
      @Override
