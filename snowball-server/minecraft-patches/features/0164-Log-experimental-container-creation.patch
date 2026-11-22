@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 01:20:00 +0000
+Subject: [PATCH] Log experimental container creation
+
+Capture a menu's construction stack only when the startup configuration
+accepts the parallel world tick opt-in and enables container diagnostics.
+Log the stack for the active non-player-inventory menu when the normal or
+unloaded close path reaches cleanup, without changing close behavior.
+This diagnostic does not depend on a world actually ticking in parallel.
+
+Adapted from Leaf patch 0174 (06c9c91a17e61aeed16bcfc846ebe91aa70d6c84),
+originally from SparklyPaper commit a274e6617255a93d567efdf00762e492aa2df535
+by MrPowerGamerBR, Altiami, Taiyou06, and MrlingXD. Licensed under the
+MIT License (see licenses/MIT.md).
+
+diff --git a/net/minecraft/server/level/ServerPlayer.java b/net/minecraft/server/level/ServerPlayer.java
+index cc1d810df9eeb84903068e51f70fe8faad8bee35..2227e85446ef2727dd856c6eba3ead43475ea24f 100644
+--- a/net/minecraft/server/level/ServerPlayer.java
++++ b/net/minecraft/server/level/ServerPlayer.java
+@@ -2073,6 +2073,7 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+         // copied from above
+         org.bukkit.craftbukkit.event.CraftEventFactory.handleInventoryCloseEvent(this, reason); // CraftBukkit
+         // Paper end
++        this.snowball$logContainerCreation(true); // SnowBall - experimental container creation diagnostics
+         // copied from below
+         this.connection.send(new ClientboundContainerClosePacket(this.containerMenu.containerId));
+         this.containerMenu = this.inventoryMenu;
+@@ -2082,11 +2083,26 @@ public class ServerPlayer extends Player implements ca.spottedleaf.moonrise.patc
+ 
+     @Override
+     public void doCloseContainer() {
++        this.snowball$logContainerCreation(false); // SnowBall - experimental container creation diagnostics
+         this.containerMenu.removed(this);
+         this.inventoryMenu.transferState(this.containerMenu);
+         this.containerMenu = this.inventoryMenu;
+     }
+ 
++    // SnowBall start - experimental container creation diagnostics
++    private void snowball$logContainerCreation(final boolean unloaded) {
++        final AbstractContainerMenu menu = this.containerMenu;
++        if (menu == this.inventoryMenu) {
++            return;
++        }
++        final Throwable creationStacktrace = menu.snowball$getCreationStacktrace();
++        if (creationStacktrace != null) {
++            LOGGER.warn("Closing {}container {} (id {}) for player {}; creation stack trace:",
++                unloaded ? "unloaded " : "", menu.getClass().getName(), menu.containerId, this.getScoreboardName(), creationStacktrace);
++        }
++    }
++    // SnowBall end - experimental container creation diagnostics
++
+     @Override
+     public void rideTick() {
+         double preX = this.getX();
+diff --git a/net/minecraft/world/inventory/AbstractContainerMenu.java b/net/minecraft/world/inventory/AbstractContainerMenu.java
+index 34c4b7359ab42f7b6cce3949eed28b784f8e4631..5f831f161f2ed496f425dad12056e00ffd6d6b67 100644
+--- a/net/minecraft/world/inventory/AbstractContainerMenu.java
++++ b/net/minecraft/world/inventory/AbstractContainerMenu.java
+@@ -36,6 +36,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
+ import net.minecraft.world.level.redstone.Redstone;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
++import org.snowballmc.snowball.experimental.ExperimentalConfig;
+ 
+ public abstract class AbstractContainerMenu {
+     private static final Logger LOGGER = LogUtils.getLogger();
+@@ -97,9 +98,21 @@ public abstract class AbstractContainerMenu {
+     public void startOpen() {}
+     // CraftBukkit end
+ 
++    // SnowBall start - experimental container creation diagnostics
++    private final @Nullable Throwable snowball$creationStacktrace;
++
++    public final @Nullable Throwable snowball$getCreationStacktrace() {
++        return this.snowball$creationStacktrace;
++    }
++    // SnowBall end - experimental container creation diagnostics
++
+     protected AbstractContainerMenu(final @Nullable MenuType<?> menuType, final int containerId) {
+         this.menuType = menuType;
+         this.containerId = containerId;
++        // SnowBall start - experimental container creation diagnostics
++        final ExperimentalConfig.World settings = ExperimentalConfig.current().world();
++        this.snowball$creationStacktrace = settings.enabled() && settings.logContainerCreationStacktraces() ? new Throwable("Container created here") : null;
++        // SnowBall end - experimental container creation diagnostics
+     }
+ 
+     protected void addInventoryHotbarSlots(final Container inventory, final int left, final int top) {

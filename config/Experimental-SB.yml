@@ -15,19 +15,19 @@ async:
     parallel-sensors-affinity: []
 
   parallel-world-ticking:
-    # 不同世界可并行处理各自的整轮 tick；当前轮所有世界结束后才进入下一轮。
-    # 当前版本只交付串行基线观测，尚不支持世界所有权转移；即便设为 true，世界也仍在主线程 tick。
+    # 实验性：符合限制的空闲世界可以并行执行整轮 tick；所有任务结束后主线程才继续。
+    # 仅限无插件、无人且无加载区块等受控场景，至少需两个连续合格的世界；不建议用于生产服。
     enable: false
-    # 同时执行世界 tick 的上限，不是世界数量。DivineMC 默认 4；手动模式要求正整数。
+    # 同时执行世界 tick 的上限，不是世界数量。DivineMC 默认 4；SnowBall 试验范围为 2–16（更高按 16，1 不启用并行）。
     thread-count: 4
-    # 记录容器创建的调用栈，用于定位跨线程容器问题；持续开启会增加诊断开销。
+    # 世界并行配置有效时采集菜单创建调用栈，在菜单关闭时记录；诊断也覆盖串行世界，长期开启会增加开销。
     log-container-creation-stacktraces: false
     # 上游用于关闭部分线程归属异常；存在世界数据损坏风险。
     # SnowBall 安全门槛：保留同名键，但不允许它关闭世界线程检查；true 必须明确警告并让世界并行保持禁用。
     disable-hard-throw: false
-    # 允许 /tpsbar 显示当前世界的统计；SnowBall 不引入整个 Purpur，仅接所需显示功能。
+    # 世界并行配置有效时，允许在线玩家用 /tpsbar 开关 TPS 栏；不要求当前世界正由 worker 执行。
     use-per-world-tps-bar: true
-    # 上一项启用时，此项 true 显示全服 TPS，false 显示当前世界 TPS。
+    # true 显示全服 TPS，false 显示玩家当前维度的 TPS；按最近约 5 秒的 tick 节奏计算，不是 MSPT。
     show-tps-of-server-instead-of-world: true
 
   parallel-sensors:

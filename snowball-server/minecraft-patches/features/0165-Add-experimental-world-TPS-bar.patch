@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Add experimental world TPS bar
+
+Sample completed world tick pacing under the existing tick owner. Render
+on the server thread after the world tick barrier. Global mode reuses
+Paper's server timing data. The display does not admit parallel work.
+
+diff --git a/net/minecraft/commands/Commands.java b/net/minecraft/commands/Commands.java
+--- a/net/minecraft/commands/Commands.java
++++ b/net/minecraft/commands/Commands.java
+@@ -322,6 +322,7 @@ public class Commands {
+             SaveOnCommand.register(this.dispatcher);
+             SetPlayerIdleTimeoutCommand.register(this.dispatcher);
+             StopCommand.register(this.dispatcher);
++            org.snowballmc.snowball.experimental.world.WorldTpsBar.register(this.dispatcher); // SnowBall - experimental TPS bar
+             TransferCommand.register(this.dispatcher);
+             WhitelistCommand.register(this.dispatcher);
+         }
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -361,6 +361,7 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTask> implements CommandSource, ServerInfo, ChunkIOErrorReporter, ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer { // Paper - rewrite chunk system
+     private long lastTickStart;
+     private long currentTickStart;
+     private long scheduledTickStart;
++    private long snowball$lastTpsBarUpdate = Util.getNanos(); // SnowBall - experimental TPS bar
+     private long taskExecutionTime;
+     /**
+      * The tickCount field is not incremented exactly where and when we want for our
+@@ -1205,6 +1206,13 @@ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTask> implements CommandSource, ServerInfo, ChunkIOErrorReporter, ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer { // Paper - rewrite chunk system
+         );
+         this.taskExecutionTime = 0L;
+ 
+         this.addTickTime(time);
++        // SnowBall start - experimental TPS bar
++        if (now - this.snowball$lastTpsBarUpdate >= TimeUtil.NANOSECONDS_PER_SECOND && !this.playerList.realPlayers.isEmpty()
++            && org.snowballmc.snowball.experimental.world.WorldTpsBar.enabled()) {
++            this.snowball$lastTpsBarUpdate = now;
++            org.snowballmc.snowball.experimental.world.WorldTpsBar.refresh(this, now);
++        }
++        // SnowBall end - experimental TPS bar
+     }
+ 
+     private void runAllTasksAtTickStart() {
+diff --git a/net/minecraft/server/level/ServerLevel.java b/net/minecraft/server/level/ServerLevel.java
+--- a/net/minecraft/server/level/ServerLevel.java
++++ b/net/minecraft/server/level/ServerLevel.java
+@@ -195,6 +195,7 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGett
+     private static final AtomicInteger ENTITY_COUNTER = new AtomicInteger();
+     private final List<ServerPlayer> players = Lists.newArrayList();
+     public final ServerChunkCache chunkSource; // Leaves - 26.2 dropped AT
++    private org.snowballmc.snowball.experimental.world.@Nullable WorldTickPacing snowball$worldTickPacing; // SnowBall - experimental TPS bar
+     private final MinecraftServer server;
+     public final io.papermc.paper.world.saveddata.PaperLevelOverrides serverLevelData; // Paper - type
+     private final EntityTickList entityTickList = new EntityTickList();
+@@ -804,6 +805,8 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGett
+     }
+ 
+     public void tick(final BooleanSupplier haveTime) {
++        final boolean samplePacing = org.snowballmc.snowball.experimental.world.WorldTpsBar.samplesWorlds(); // SnowBall - experimental TPS bar
++        final long pacingStart = samplePacing ? net.minecraft.util.Util.getNanos() : 0L; // SnowBall - experimental TPS bar
+         ProfilerFiller profiler = Profiler.get();
+         this.handlingTick = true;
+         this.environmentAttributes().invalidateTickCache();
+@@ -967,6 +970,20 @@ public class ServerLevel extends Level implements WorldGenLevel, ServerEntityGett
+         this.debugSynchronizers.tick(this.server.debugSubscribers());
+         profiler.pop();
+         this.chunkSource.randomState().garbageCollect();
++        // SnowBall start - experimental TPS bar
++        if (samplePacing) {
++            if (this.snowball$worldTickPacing == null) {
++                this.snowball$worldTickPacing = new org.snowballmc.snowball.experimental.world.WorldTickPacing();
++            }
++            this.snowball$worldTickPacing.completedTick(pacingStart, net.minecraft.util.Util.getNanos());
++        }
++        // SnowBall end - experimental TPS bar
++    }
++
++    // SnowBall - read only by the server thread once the world-tick jobs are complete.
++    public @Nullable Double snowball$getWorldTickPacing(final long now, final long targetInterval) {
++        final var pacing = this.snowball$worldTickPacing;
++        return pacing == null ? null : pacing.average(now, targetInterval);
+     }
+ 
+     @Override
+diff --git a/net/minecraft/server/network/ServerGamePacketListenerImpl.java b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+--- a/net/minecraft/server/network/ServerGamePacketListenerImpl.java
++++ b/net/minecraft/server/network/ServerGamePacketListenerImpl.java
+@@ -272,6 +272,7 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+     private static final Component CHAT_VALIDATION_FAILED = Component.translatable("multiplayer.disconnect.chat_validation_failed");
+     private static final Component INVALID_COMMAND_SIGNATURE = Component.translatable("chat.disabled.invalid_command_signature").withStyle(ChatFormatting.RED);
+     public ServerPlayer player;
++    public volatile net.minecraft.server.level.@Nullable ServerBossEvent snowball$tpsBar; // SnowBall - experimental TPS bar; shutdown may clear off-thread
+     public final PlayerChunkSender chunkSender;
+     private int tickCount;
+     private int ackBlockChangesUpTo = -1;
+@@ -2363,6 +2364,14 @@ public class ServerGamePacketListenerImpl extends ServerCommonPacketListenerImpl
+             .broadcastSystemMessage(Component.translatable("multiplayer.player.left", this.player.getDisplayName()).withStyle(ChatFormatting.YELLOW), false);
+          */
+         this.player.disconnect();
++        // SnowBall start - experimental TPS bar
++        final var bar = this.snowball$tpsBar;
++        this.snowball$tpsBar = null;
++        if (bar != null && this.waitingForSwitchToConfig && Thread.currentThread() == this.server.getRunningThread() && this.connection.isConnected()) {
++            // A real logout has no client to update. A config switch still uses the play protocol here.
++            bar.removePlayer(this.player);
++        }
++        // SnowBall end - experimental TPS bar
+         // Paper start - Adventure
+         quitMessage = quitMessage == null ? this.server.getPlayerList().remove(this.player) : this.server.getPlayerList().remove(this.player, quitMessage); // Paper - pass in quitMessage to fix kick message not being used
+         if ((quitMessage != null) && !quitMessage.equals(net.kyori.adventure.text.Component.empty())) {

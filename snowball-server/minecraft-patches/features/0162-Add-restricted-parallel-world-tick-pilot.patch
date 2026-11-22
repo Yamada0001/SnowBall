@@ -1,0 +1,347 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 12:00:00 +0000
+Subject: [PATCH] Add restricted parallel world tick pilot
+
+Run complete ServerLevel ticks on a fixed pool only for verified idle worlds
+on a player- and plugin-free dedicated server. Keep normal world ticks in
+order and run global server phases only after the world worker barrier.
+The Moonrise idle invariant and exact world ownership are supplied by 0163.
+
+Design reference: Leaf d65e8b9c0bc383bbc9f2a5a91c363e0662544108, server
+patches 0174/0045, and SparklyPaper a274e6617255a93d567efdf00762e492aa2df535
+(MrPowerGamerBR and contributors; MIT). SnowBall reimplements a restricted
+pilot rather than copying Leaf's compatibility bypasses.
+
+diff --git a/net/minecraft/server/MinecraftServer.java b/net/minecraft/server/MinecraftServer.java
+--- a/net/minecraft/server/MinecraftServer.java
++++ b/net/minecraft/server/MinecraftServer.java
+@@ -21,6 +21,7 @@
+ import java.nio.file.Files;
+ import java.nio.file.Path;
+ import java.security.KeyPair;
++import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -164,6 +165,7 @@
+ import net.minecraft.world.level.gamerules.GameRuleMap;
+ import net.minecraft.world.level.gamerules.GameRuleTypeVisitor;
+ import net.minecraft.world.level.gamerules.GameRules;
++import net.minecraft.world.level.border.BorderStatus;
+ import net.minecraft.world.level.levelgen.Heightmap;
+ import net.minecraft.world.level.levelgen.PatrolSpawner;
+ import net.minecraft.world.level.levelgen.PhantomSpawner;
+@@ -186,6 +188,9 @@
+ import net.minecraft.world.scores.ScoreboardSaveData;
+ import org.jspecify.annotations.Nullable;
+ import org.slf4j.Logger;
++import ca.spottedleaf.moonrise.common.util.TickThread; // SnowBall - restricted world tick pilot
++import org.snowballmc.snowball.experimental.ExperimentalConfig; // SnowBall - restricted world tick pilot
++import org.snowballmc.snowball.experimental.world.ParallelWorldTicker; // SnowBall - restricted world tick pilot
+ 
+ public abstract class MinecraftServer extends ReentrantBlockableEventLoop<TickTask> implements CommandSource, ServerInfo, ChunkIOErrorReporter, ca.spottedleaf.moonrise.patches.chunk_system.server.ChunkSystemMinecraftServer { // Paper - rewrite chunk system
+     private static MinecraftServer SERVER; // Paper
+@@ -258,6 +263,12 @@
+     private final ServerActivityMonitor serverActivityMonitor;
+     private long lastServerStatus;
+     private final Thread serverThread;
++    // SnowBall start - restricted world tick pilot
++    private boolean snowball$parallelWorldTickPilot; // writes and off-thread reads guarded by stopLock
++    private int snowball$worldTickWorkerCount;
++    private @Nullable ParallelWorldTicker<ServerLevel> snowball$worldTicker;
++    private @Nullable String snowball$worldTickState;
++    // SnowBall end - restricted world tick pilot
+     private long lastTickNanos = Util.getNanos();
+     private long taskExecutionStartNanos = Util.getNanos();
+     private long idleTimeNanos;
+@@ -463,6 +474,9 @@
+ 
+     @Override
+     public final void moonrise$executeMidTickTasks() {
++        if (Thread.currentThread() instanceof TickThread.WorldTickThread) { // SnowBall - restricted world tick pilot
++            throw new IllegalStateException("A world tick worker must not drain server-wide chunk tasks");
++        }
+         final long startTime = System.nanoTime();
+         if ((startTime - this.lastMidTickExecute) <= CHUNK_TASK_QUEUE_BACKOFF_MIN_TIME || (startTime - this.lastMidTickExecuteFailure) <= TASK_EXECUTION_FAILURE_BACKOFF) {
+             // it's shown to be bad to constantly hit the queue (chunk loads slow to a crawl), even if no tasks are executed.
+@@ -1007,17 +1021,29 @@
+     }
+     // CraftBukkit end
+ 
++    protected void snowball$notifyServerShuttingDown() {} // SnowBall - dedicated shutdown notification hook
++
+     protected void stopServer() {
+         if (Thread.currentThread() == this.serverThread) this.executeAllRecentInternalTasks(); // Paper - execute tasks on stop
+         // CraftBukkit start - prevent double stopping on multiple threads
+         synchronized (this.stopLock) {
+             if (this.hasStopped) return;
++            // SnowBall start - a watchdog or shutdown hook must not save worlds concurrently with the pilot
++            if (this.snowball$parallelWorldTickPilot && Thread.currentThread() != this.serverThread && this.serverThread.isAlive()) {
++                this.running = false;
++                return;
++            }
++            // SnowBall end - restricted world tick pilot
+             this.hasStopped = true;
+             this.snowballEntityCulling.close(); // SnowBall - raytrace entity culling
+             if (this.naturalSpawnCountExecutor != null) {
+                 this.naturalSpawnCountExecutor.shutdownNow(); // SnowBall - async natural spawn counts
+             }
+         }
++        if (Thread.currentThread() == this.serverThread && this.snowball$worldTicker != null) {
++            this.snowball$worldTicker.close(); // SnowBall - join before shutdown, outside stopLock
++        }
++        this.snowball$notifyServerShuttingDown(); // SnowBall - run only after claiming shutdown and joining workers
+         if (!this.hasLoggedStop && this.isDebugging()) io.papermc.paper.util.TraceUtil.dumpTraceForThread("Server stopped"); // Paper - Debugging
+         this.shutdownThread = Thread.currentThread(); // Paper - Improved watchdog support
+         org.spigotmc.WatchdogThread.doStop(); // Paper - Improved watchdog support
+@@ -1127,6 +1153,9 @@
+         this.halt(wait, false);
+     }
+     public void halt(final boolean wait, final boolean isRestarting) {
++        if (wait && Thread.currentThread() instanceof TickThread.WorldTickThread) { // SnowBall - restricted world tick pilot
++            throw new IllegalStateException("A world tick worker cannot wait for its server coordinator");
++        }
+         this.isRestarting = isRestarting;
+         this.hasLoggedStop = true; // Paper - Debugging
+         if (this.isDebugging()) io.papermc.paper.util.TraceUtil.dumpTraceForThread("Server stopped"); // Paper - Debugging
+@@ -1289,6 +1318,7 @@
+             LOGGER.info("Running delayed init tasks");
+             new io.papermc.paper.threadedregions.RegionizedServerInitEvent().callEvent(); // Call Folia init event
+             this.server.getScheduler().mainThreadHeartbeat(); // run all 1 tick delay tasks during init,
++            this.snowball$initParallelWorldTicking(); // SnowBall - restricted world tick pilot
+             // this is going to be the first thing the tick process does anyway, so move done and run it after
+             // everything is init before watchdog tick.
+             // anything at 3+ won't be caught here but also will trip watchdog....
+@@ -1824,46 +1854,11 @@
+         this.updateEffectiveRespawnData();
+ 
+         this.isIteratingOverLevels = true; // Paper - Throw exception on world create while being ticked
+-        for (ServerLevel level : this.getAllLevels()) {
+-            level.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
+-            level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
+-            level.updateLagCompensationTick(); // Paper - lag compensation
+-            profiler.push(() -> level + " " + level.dimension().identifier());
+-            profiler.push("tick");
+-
+-            try {
+-                // SnowBall start - observe serial world tick time
+-                final ProfiledDuration worldTick = JvmProfiler.INSTANCE.onWorldTick(level.dimension(), this.tickCount);
+-                boolean completed = false;
+-                try {
+-                    level.tick(haveTime);
+-                    completed = true;
+-                } finally {
+-                    if (worldTick != null) {
+-                        worldTick.finish(completed);
+-                    }
+-                }
+-                // SnowBall end - observe serial world tick time
+-            // Leaves start - update suppression crash fix
+-            } catch (org.snowballmc.snowball.util.UpdateSuppressionException exception) {
+-                exception.provideLevel(level);
+-                exception.consume();
+-            } catch (Throwable t) {
+-                if (t.getCause() instanceof org.snowballmc.snowball.util.UpdateSuppressionException exception) {
+-                    exception.provideLevel(level);
+-                    exception.consume();
+-                }
+-                // Leaves end - update suppression crash fix
+-                CrashReport report = CrashReport.forThrowable(t, "Exception ticking world");
+-                level.fillReportDetails(report);
+-                throw new ReportedException(report);
+-            }
+-
+-            profiler.pop();
+-            profiler.pop();
+-            level.explosionDensityCache.clear(); // Paper - Optimize explosions
+-        }
+-        this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
++        try {
++            this.snowball$tickLevels(haveTime, profiler); // SnowBall - restricted world tick pilot
++        } finally {
++            this.isIteratingOverLevels = false; // Paper - Throw exception on world create while being ticked
++        }
+ 
+         profiler.popPush("connection");
+         this.tickConnection();
+@@ -1896,6 +1891,164 @@
+         profiler.pop();
+         this.serverActivityMonitor.tick();
+     }
++
++    // SnowBall start - restricted world tick pilot
++    private void snowball$initParallelWorldTicking() {
++        final ExperimentalConfig.World config = ExperimentalConfig.current().world();
++        if (!config.enabled()) {
++            return;
++        }
++        if (!this.isDedicatedServer() || this.server.getPluginManager().getPlugins().length != 0) {
++            this.snowball$worldTickStatus("inactive: requires a dedicated server with no loaded plugins");
++            return;
++        }
++        this.snowball$worldTickWorkerCount = Math.min(config.threadCount(), ParallelWorldTicker.MAX_WORLDS);
++        if (this.snowball$worldTickWorkerCount < 2) {
++            this.snowball$worldTickStatus("inactive: requires at least two workers");
++            return;
++        }
++        // Synchronize admission with the transition to stopping; do not hold this lock around any wait.
++        synchronized (this.stopLock) {
++            if (this.hasStopped || !this.running) {
++                return;
++            }
++            this.snowball$parallelWorldTickPilot = true;
++        }
++        this.snowball$worldTickStatus("inactive: waiting for a batch of at least two consecutive verified idle worlds");
++    }
++
++    private void snowball$worldTickStatus(final String state) {
++        if (!state.equals(this.snowball$worldTickState)) {
++            this.snowball$worldTickState = state;
++            LOGGER.info("Parallel world tick pilot opted in, {}", state);
++        }
++    }
++
++    private boolean snowball$isParallelWorldTickCandidate(final ServerLevel level) {
++        // No live entities can portal, select a POI in another world, or update shared player state.
++        // No loaded chunks means queued block events cannot execute or load chunks. No synchronous Bukkit
++        // events are allowed on workers, even with zero plugin listeners (weather/border below).
++        return level.players().isEmpty()
++            && !level.isHandlingTick()
++            && level.getDragonFight() == null
++            && (!level.canHaveWeather() || !level.getGameRules().get(GameRules.ADVANCE_WEATHER))
++            && level.getWorldBorder().getStatus() == BorderStatus.STATIONARY
++            && level.scheduledEvents.getEventsIds().isEmpty()
++            && level.getRaids().raidMap.isEmpty()
++            && level.moonrise$getEntityLookup().getEntityCount() == 0
++            && level.blockEntityTickers.isEmpty()
++            && level.getBlockTicks().count() == 0 && level.getFluidTicks().count() == 0
++            && level.getChunkSource().snowball$isParallelTickIdle();
++    }
++
++    private void snowball$tickLevels(final BooleanSupplier haveTime, final ProfilerFiller profiler) {
++        if (!this.snowball$parallelWorldTickPilot || !this.running) {
++            for (final ServerLevel level : this.getAllLevels()) {
++                this.snowball$tickLevel(level, haveTime, profiler);
++            }
++            return;
++        }
++
++        String blocked = null;
++        if (this.server.getPluginManager().getPlugins().length != 0) {
++            blocked = "inactive: plugins are loaded";
++        } else if (!this.playerList.getPlayers().isEmpty() || !this.botList.bots.isEmpty() || !this.debugSubscribers.enabledSubscriptions().isEmpty()) {
++            blocked = "inactive: players, bots, or debug subscribers are present";
++        } else if (org.snowballmc.snowball.LeavesConfig.modify.elytraAeronautics.enableNoChunkLoad) {
++            blocked = "inactive: elytra-aeronautics can tick detached entities";
++        } else if (this.levels.size() > ParallelWorldTicker.MAX_WORLDS) {
++            blocked = "inactive: too many loaded worlds (limit " + ParallelWorldTicker.MAX_WORLDS + ")";
++        }
++        if (blocked != null) {
++            this.snowball$worldTickStatus(blocked);
++            for (final ServerLevel level : this.getAllLevels()) {
++                this.snowball$tickLevel(level, haveTime, profiler);
++            }
++            return;
++        }
++
++        final List<ServerLevel> levels = new ArrayList<>(this.levels.values());
++        boolean ranParallel = false;
++        for (int start = 0; start < levels.size();) {
++            int end = start;
++            // Keep serial worlds in their original positions and recheck after ticking one. A
++            // preceding serial level may have changed the state of the next world.
++            while (this.running && end < levels.size() && this.snowball$isParallelWorldTickCandidate(levels.get(end))) {
++                ++end;
++            }
++            if (end - start < 2) {
++                this.snowball$tickLevel(levels.get(start++), haveTime, profiler);
++                continue;
++            }
++            if (this.snowball$worldTicker == null) {
++                final java.util.concurrent.atomic.AtomicInteger workerId = new java.util.concurrent.atomic.AtomicInteger();
++                this.snowball$worldTicker = new ParallelWorldTicker<>(this.snowball$worldTickWorkerCount, runnable ->
++                    new TickThread.WorldTickThread(runnable, "SnowBall World Tick Worker #" + workerId.incrementAndGet()));
++            }
++            final List<ServerLevel> batch = levels.subList(start, end);
++            this.snowball$worldTickStatus("active: up to " + this.snowball$worldTickWorkerCount + " workers for verified idle worlds; other worlds remain serial");
++            final boolean budget = haveTime.getAsBoolean(); // snapshot the coordinator's tick-time budget
++            profiler.push("parallelWorldBarrier");
++            try {
++                this.snowball$worldTicker.tick(batch, level -> this.snowball$tickLevel(level, () -> budget, Profiler.get()));
++            } finally {
++                profiler.pop();
++            }
++            ranParallel = true;
++            start = end;
++        }
++        if (!ranParallel) {
++            this.snowball$worldTickStatus("inactive: waiting for a batch of at least two consecutive verified idle worlds");
++        }
++    }
++
++    private ReportedException snowball$worldTickException(final ServerLevel level, final Throwable failure) {
++        final CrashReport report = CrashReport.forThrowable(failure, "Exception ticking world");
++        level.fillReportDetails(report);
++        return new ReportedException(report);
++    }
++
++    private void snowball$tickLevel(final ServerLevel level, final BooleanSupplier haveTime, final ProfilerFiller profiler) {
++        level.hasPhysicsEvent = org.bukkit.event.block.BlockPhysicsEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - BlockPhysicsEvent
++        level.hasEntityMoveEvent = io.papermc.paper.event.entity.EntityMoveEvent.getHandlerList().getRegisteredListeners().length > 0; // Paper - Add EntityMoveEvent
++        level.updateLagCompensationTick(); // Paper - lag compensation
++        profiler.push(() -> level + " " + level.dimension().identifier());
++        profiler.push("tick");
++
++        try {
++            // SnowBall start - observe world tick time
++            final ProfiledDuration worldTick = JvmProfiler.INSTANCE.onWorldTick(level.dimension(), this.tickCount);
++            boolean completed = false;
++            try {
++                level.tick(haveTime);
++                completed = true;
++            } finally {
++                if (worldTick != null) {
++                    worldTick.finish(completed);
++                }
++            }
++            // SnowBall end - observe world tick time
++        // Leaves start - update suppression crash fix
++        } catch (org.snowballmc.snowball.util.UpdateSuppressionException exception) {
++            if (ParallelWorldTicker.owns(level)) {
++                throw this.snowball$worldTickException(level, exception);
++            }
++            exception.provideLevel(level);
++            exception.consume();
++        } catch (Throwable t) {
++            if (!ParallelWorldTicker.owns(level) && t.getCause() instanceof org.snowballmc.snowball.util.UpdateSuppressionException exception) {
++                exception.provideLevel(level);
++                exception.consume();
++            }
++            // Leaves end - update suppression crash fix
++            throw this.snowball$worldTickException(level, t);
++        }
++
++        profiler.pop();
++        profiler.pop();
++        level.explosionDensityCache.clear(); // Paper - Optimize explosions
++    }
++    // SnowBall end - restricted world tick pilot
+ 
+     // Paper start - per world respawn data
+     public void updateEffectiveRespawnData() {
+diff --git a/net/minecraft/server/dedicated/DedicatedServer.java b/net/minecraft/server/dedicated/DedicatedServer.java
+--- a/net/minecraft/server/dedicated/DedicatedServer.java
++++ b/net/minecraft/server/dedicated/DedicatedServer.java
+@@ -910,10 +910,8 @@
+     }
+ 
+     @Override
+-    protected void stopServer() {
++    protected void snowball$notifyServerShuttingDown() { // SnowBall - restricted world tick pilot
+         this.notificationManager().serverShuttingDown();
+-        super.stopServer();
+-        //Util.shutdownExecutors(); // Paper - Improved watchdog support; moved into super
+     }
+ 
+     @Override

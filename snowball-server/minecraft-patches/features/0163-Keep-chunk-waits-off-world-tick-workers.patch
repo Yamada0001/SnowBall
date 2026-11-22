@@ -1,0 +1,405 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Keep chunk waits off world tick workers
+
+The primary thread is at the world-tick barrier and cannot run a worker's
+chunk dependencies. Reject such work before queueing it rather than letting
+workers execute unrelated legacy or Moonrise tasks. The primary thread
+keeps both normal queue drains. An idle worker can advance its world's
+chunk ticket clock, but cannot process new tickets, unloads, or saves.
+
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/queue/ChunkUnloadQueue.java b/ca/spottedleaf/moonrise/patches/chunk_system/queue/ChunkUnloadQueue.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/queue/ChunkUnloadQueue.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/queue/ChunkUnloadQueue.java
+@@ -28,6 +28,10 @@
+     }
+ 
+     public static record SectionToUnload(int sectionX, int sectionZ, long order, int count) {}
+ 
++    public boolean snowball$isEmpty() {
++        return this.unloadSections.isEmpty();
++    }
++
+     public List<SectionToUnload> retrieveForAllRegions() {
+         final List<SectionToUnload> ret = new ArrayList<>();
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkHolderManager.java
+@@ -118,6 +118,22 @@
+         this.unloadQueue = new ChunkUnloadQueue(((ChunkSystemServerLevel)world).moonrise$getRegionChunkShift());
+     }
+ 
++    // SnowBall - Called on the primary thread before dispatch, or by the owner while the primary thread waits.
++    public boolean snowball$isParallelTickIdle() {
++        TickThread.ensureTickThread(this.world, "Checking chunk holder quiescence");
++        return this.chunkHolders.isEmpty() && this.tickets.isEmpty() && this.sectionToChunkToExpireCount.isEmpty()
++            && !this.ticketLevelPropagator.hasPendingUpdates() && this.pendingFullLoadUpdate.isEmpty()
++            && this.offThreadPendingFullLoadUpdate.isEmpty() && this.unloadQueue.snowball$isEmpty()
++            && this.autoSaveQueue.isEmpty() && BLOCK_TICKET_UPDATES.get() != Boolean.TRUE;
++    }
++
++    private void snowball$requireNoWorldWorker(final String operation) {
++        if (TickThread.isWorldTickThread()) {
++            TickThread.ensureTickThread(operation);
++        }
++    }
++
+     public boolean processTicketUpdates(final int chunkX, final int chunkZ) {
++        this.snowball$requireNoWorldWorker("Cannot process chunk ticket updates from a world tick worker");
+         final int ticketShift = ThreadedTicketLevelPropagator.SECTION_SHIFT;
+         final int ticketMask = (1 << ticketShift) - 1;
+@@ -238,5 +254,6 @@
+     }
+ 
+     public void autoSave() {
++        this.snowball$requireNoWorldWorker("Cannot autosave chunks from a world tick worker");
+         final List<NewChunkHolder> reschedule = new ArrayList<>();
+         final long currentTick = this.currentTick;
+@@ -599,6 +616,7 @@
+     }
+ 
+     <T> boolean addTicketAtLevel(final TicketType type, final long chunk, final int level, final T identifier, final boolean lock) {
++        this.snowball$requireNoWorldWorker("Cannot add chunk tickets from a world tick worker");
+         final long removeDelay = type.timeout() <= 0 ? NO_TIMEOUT_MARKER : type.timeout();
+         if (level > MAX_TICKET_LEVEL) {
+             return false;
+@@ -679,6 +697,7 @@
+     }
+ 
+     <T> boolean removeTicketAtLevel(final TicketType type, final long chunk, final int level, final T identifier, final boolean lock) {
++        this.snowball$requireNoWorldWorker("Cannot remove chunk tickets from a world tick worker");
+         if (level > MAX_TICKET_LEVEL) {
+             return false;
+         }
+@@ -825,6 +844,14 @@
+     }
+ 
+     public void tick() {
++        if (TickThread.isWorldTickThread()) {
++            // No expiry, propagation, or callback processing on the restricted pilot.
++            if (!this.snowball$isParallelTickIdle()) {
++                throw new IllegalStateException("Chunk ticket state changed during idle world tick: " + this.world.dimension().identifier());
++            }
++            ++this.currentTick;
++            return;
++        }
+         ++this.currentTick;
+ 
+         final int sectionShift = ((ChunkSystemServerLevel)this.world).moonrise$getRegionChunkShift();
+@@ -998,6 +1025,7 @@
+     // note: only call from the ChunkFullTask
+     // this allows us to avoid checking if the entity NBT is loaded which avoids entering the ticket/scheduling lock
+     public ChunkEntitySlices fullTaskLoadEntityChunk(final int chunkX, final int chunkZ) {
++        this.snowball$requireNoWorldWorker("Cannot load chunk entities from a world tick worker");
+         TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create entity chunk off-main");
+         ChunkEntitySlices ret;
+ 
+@@ -1019,6 +1047,7 @@
+     }
+ 
+     public ChunkEntitySlices getOrCreateEntityChunk(final int chunkX, final int chunkZ, final boolean transientChunk) {
++        this.snowball$requireNoWorldWorker("Cannot load chunk entities from a world tick worker");
+         TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create entity chunk off-main");
+         ChunkEntitySlices ret;
+ 
+@@ -1099,6 +1128,7 @@
+         return null;
+     }
+ 
+     public PoiChunk loadPoiChunk(final int chunkX, final int chunkZ) {
++        this.snowball$requireNoWorldWorker("Cannot load chunk POI data from a world tick worker");
+         TickThread.ensureTickThread(this.world, chunkX, chunkZ, "Cannot create poi chunk off-main");
+         PoiChunk ret;
+@@ -1481,6 +1511,7 @@
+     }
+ 
+     public boolean processTicketUpdates() {
++        this.snowball$requireNoWorldWorker("Cannot process chunk ticket updates from a world tick worker");
+         if (BLOCK_TICKET_UPDATES.get() == Boolean.TRUE) {
+             throw new IllegalStateException("Cannot update ticket level while unloading chunks or updating entity manager");
+         }
+diff --git a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+--- a/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
++++ b/ca/spottedleaf/moonrise/patches/chunk_system/scheduling/ChunkTaskScheduler.java
+@@ -329,9 +329,22 @@
+         TickThread.ensureTickThread("Cannot execute main thread task off-main");
+         return this.mainThreadExecutor.executeTask();
+     }
+ 
++    public boolean snowball$hasPendingMainThreadTasks() {
++        // Read the completed count first, just as the primary drain does.
++        final long executed = this.mainThreadExecutor.getTotalTasksExecuted();
++        return this.mainThreadExecutor.getTotalTasksScheduled() != executed;
++    }
++
++    private void snowball$requireNoWorldWorker(final String operation) {
++        if (TickThread.isWorldTickThread()) {
++            TickThread.ensureTickThread(operation);
++        }
++    }
++
+     // run only tasks queued before this function was invoked
+     public void executeAllRecentlyQueuedMainThreadTasks() {
++        this.snowball$requireNoWorldWorker("Cannot drain Moonrise chunk tasks from a world tick worker");
+         // note: order of retrieval is important to avoid race conditions
+         final long executed = this.mainThreadExecutor.getTotalTasksExecuted();
+         final long scheduled = this.mainThreadExecutor.getTotalTasksScheduled();
+@@ -355,7 +368,8 @@
+ 
+     public void scheduleTickingState(final int chunkX, final int chunkZ, final FullChunkStatus toStatus,
+                                      final boolean addTicket, final Priority priority,
+                                      final Consumer<LevelChunk> onComplete) {
++        this.snowball$requireNoWorldWorker("Cannot schedule a chunk status change from a world tick worker");
+         final int radius = toStatus.ordinal() - 1; // 0 -> BORDER, 1 -> TICKING, 2 -> ENTITY_TICKING
+ 
+         if (!TickThread.isTickThreadFor(this.world, chunkX, chunkZ, Math.max(0, radius))) {
+@@ -517,5 +531,6 @@
+     // between regions
+     public ChunkAccess syncLoadNonFull(final int chunkX, final int chunkZ, final ChunkStatus status) {
++        this.snowball$requireNoWorldWorker("Cannot synchronously load a chunk from a world tick worker");
+         if (status == null || status.isOrAfter(ChunkStatus.FULL)) {
+             throw new IllegalArgumentException("Status: " + status);
+         }
+@@ -561,6 +576,7 @@
+     }
+ 
+     public void scheduleChunkLoad(final int chunkX, final int chunkZ, final ChunkStatus toStatus, final boolean addTicket,
+                                   final Priority priority, final Consumer<ChunkAccess> onComplete) {
++        this.snowball$requireNoWorldWorker("Cannot schedule a chunk load from a world tick worker");
+         if (!TickThread.isTickThreadFor(this.world, chunkX, chunkZ)) {
+             this.scheduleChunkTask(chunkX, chunkZ, () -> {
+@@ -823,5 +839,6 @@
+      */
+     @Deprecated
+     public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final Runnable run, final Priority priority) {
++        this.snowball$requireNoWorldWorker("Cannot schedule a Moonrise chunk task from a world tick worker");
+         return this.mainThreadExecutor.queueTask(run, priority);
+     }
+@@ -831,6 +848,7 @@
+     }
+ 
+     public PrioritisedExecutor.PrioritisedTask createChunkTask(final int chunkX, final int chunkZ, final Runnable run,
+                                                                final Priority priority) {
++        this.snowball$requireNoWorldWorker("Cannot create a Moonrise chunk task from a world tick worker");
+         return this.mainThreadExecutor.createTask(run, priority);
+     }
+@@ -840,6 +858,7 @@
+     }
+ 
+     public PrioritisedExecutor.PrioritisedTask scheduleChunkTask(final int chunkX, final int chunkZ, final Runnable run,
+                                                                  final Priority priority) {
++        this.snowball$requireNoWorldWorker("Cannot schedule a Moonrise chunk task from a world tick worker");
+         return this.mainThreadExecutor.queueTask(run, priority);
+     }
+diff --git a/net/minecraft/server/level/ChunkMap.java b/net/minecraft/server/level/ChunkMap.java
+--- a/net/minecraft/server/level/ChunkMap.java
++++ b/net/minecraft/server/level/ChunkMap.java
+@@ -402,7 +402,12 @@
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("poi");
+         this.poiManager.tick(haveTime);
+         profiler.popPush("chunk_unload");
+-        if (!this.level.noSave()) {
++        if (ca.spottedleaf.moonrise.common.util.TickThread.isWorldTickThread()) {
++            // The idle worker must not enter primary-thread unload or autosave processing.
++            if (!this.level.getChunkSource().snowball$isParallelTickIdle()) {
++                throw new IllegalStateException("Chunk state changed during idle world tick: " + this.level.dimension().identifier());
++            }
++        } else if (!this.level.noSave()) {
+             this.processUnloads(haveTime);
+         }
+diff --git a/net/minecraft/server/level/ServerChunkCache.java b/net/minecraft/server/level/ServerChunkCache.java
+--- a/net/minecraft/server/level/ServerChunkCache.java
++++ b/net/minecraft/server/level/ServerChunkCache.java
+@@ -1,5 +1,7 @@
+ package net.minecraft.server.level;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
++import ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler;
+ import com.google.common.annotations.VisibleForTesting;
+ import com.mojang.datafixers.DataFixer;
+ import com.mojang.logging.LogUtils;
+@@ -108,6 +110,7 @@
+     }
+ 
+     private ChunkAccess syncLoad(final int chunkX, final int chunkZ, final ChunkStatus toStatus) {
++        this.snowball$requireNoWorldWorker("Cannot wait for an unloaded chunk from a world tick worker");
+         final ca.spottedleaf.moonrise.patches.chunk_system.scheduling.ChunkTaskScheduler chunkTaskScheduler = ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getChunkTaskScheduler();
+         final CompletableFuture<ChunkAccess> completable = new CompletableFuture<>();
+         chunkTaskScheduler.scheduleChunkLoad(
+@@ -310,6 +313,7 @@
+ 
+     @Override
+     public @Nullable ChunkAccess getChunk(final int x, final int z, final ChunkStatus targetStatus, final boolean loadOrGenerate) {
++        this.snowball$checkWorldWorkerOwner();
+         // Paper start - rewrite chunk system
+         if (targetStatus == ChunkStatus.FULL) {
+             final LevelChunk ret = this.fullChunks.get(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(x, z));
+@@ -327,6 +331,7 @@
+ 
+     @Override
+     public @Nullable LevelChunk getChunkNow(final int x, final int z) {
++        this.snowball$checkWorldWorkerOwner();
+         // Paper start - rewrite chunk system
+         final LevelChunk ret = this.fullChunks.get(ca.spottedleaf.moonrise.common.util.CoordinateUtils.getChunkKey(x, z));
+         if (!ca.spottedleaf.moonrise.common.PlatformHooks.get().hasCurrentlyLoadingChunk()) {
+@@ -357,6 +362,10 @@
+     public CompletableFuture<ChunkResult<ChunkAccess>> getChunkFuture(final int chunkX, final int chunkZ,
+                                                                       final ChunkStatus toStatus,
+                                                                       final boolean create) {
++        if (TickThread.isWorldTickThread()) {
++            return CompletableFuture.failedFuture(new IllegalStateException("Chunk futures are unavailable on world tick workers: "
++                + this.level.dimension().identifier() + " at " + new ChunkPos(chunkX, chunkZ)));
++        }
+         if (ca.spottedleaf.moonrise.common.util.TickThread.isTickThreadFor(this.level, chunkX, chunkZ)) {
+             final CompletableFuture<ChunkResult<ChunkAccess>> ret = this.getChunkFutureInternal(chunkX, chunkZ, toStatus, create, true);
+             this.mainThreadProcessor.managedBlock(ret::isDone);
+@@ -385,5 +394,6 @@
+ 
+     private CompletableFuture<ChunkResult<ChunkAccess>> getChunkFutureInternal(
+         final int x, final int z, final ChunkStatus targetStatus, final boolean loadOrGenerate, final boolean intendingToBlock
+     ) {
++        this.snowball$requireNoWorldWorker("Cannot start a chunk future from a world tick worker");
+         ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(this.level, x, z, "Scheduling chunk load off-main");
+@@ -498,17 +508,50 @@
+     // CraftBukkit end
+ 
++    private void snowball$requireNoWorldWorker(final String operation) {
++        if (TickThread.isWorldTickThread()) {
++            TickThread.ensureTickThread(operation);
++        }
++    }
++
++    private void snowball$checkWorldWorkerOwner() {
++        if (TickThread.isWorldTickThread()) {
++            TickThread.ensureTickThread(this.level, "Cannot access a foreign world's chunk cache");
++        }
++    }
++
++    public boolean snowball$isParallelTickIdle() {
++        TickThread.ensureTickThread(this.level, "Checking chunk source quiescence");
++        final ChunkTaskScheduler scheduler = this.level.moonrise$getChunkTaskScheduler();
++        return !scheduler.hasShutdown() && this.level.players().isEmpty() && this.fullChunks.isEmpty()
++            && this.chunkHoldersToBroadcast.isEmpty() && this.spawningChunks.isEmpty()
++            && this.level.moonrise$getTickingChunks().size() == 0
++            && this.level.moonrise$getEntityTickingChunks().size() == 0
++            && this.level.moonrise$getPlayerTickingChunks().size() == 0
++            && this.chunkMap.entityMap.isEmpty()
++            && this.getPendingTasksCount() == 0 && !scheduler.snowball$hasPendingMainThreadTasks()
++            && scheduler.chunkHolderManager.snowball$isParallelTickIdle();
++    }
++
+     @Override
+     public void tick(final BooleanSupplier haveTime, final boolean tickChunks) {
++        final boolean worldWorker = TickThread.isWorldTickThread();
++        if (worldWorker && !this.snowball$isParallelTickIdle()) {
++            throw new IllegalStateException("Cannot tick a non-idle chunk source on a world tick worker: " + this.level.dimension().identifier());
++        }
+         ProfilerFiller profiler = Profiler.get();
+         profiler.push("purge");
+         if (this.level.tickRateManager().runsNormally() || !tickChunks || this.level.spigotConfig.unloadFrozenChunks) { // Spigot
+             this.ticketStorage.purgeStaleTickets(this.chunkMap);
+         }
+ 
+-        this.runDistanceManagerUpdates();
++        if (!worldWorker) {
++            this.runDistanceManagerUpdates();
++        }
+         profiler.popPush("chunks");
+         if (tickChunks) {
+-            ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getPlayerChunkLoader().tick(); // Paper - rewrite chunk system
++            if (!worldWorker) {
++                ((ca.spottedleaf.moonrise.patches.chunk_system.level.ChunkSystemServerLevel)this.level).moonrise$getPlayerChunkLoader().tick(); // Paper - rewrite chunk system
++            }
+             this.tickChunks();
+             this.chunkMap.tick();
+         }
+@@ -886,6 +929,12 @@
+         }
+ 
+         @Override
++        public void schedule(final Runnable task) {
++            ServerChunkCache.this.snowball$requireNoWorldWorker("Cannot schedule a legacy chunk task from a world tick worker");
++            super.schedule(task);
++        }
++
++        @Override
+         protected Thread getRunningThread() {
+             return ServerChunkCache.this.mainThread;
+         }
+@@ -898,6 +947,7 @@
+ 
+         @Override
+         protected boolean pollTask() {
++            ServerChunkCache.this.snowball$requireNoWorldWorker("Cannot poll legacy or Moonrise chunk queues from a world tick worker");
+             if (ServerChunkCache.this.runDistanceManagerUpdates()) {
+                 return true;
+             }
+diff --git a/net/minecraft/util/thread/BlockableEventLoop.java b/net/minecraft/util/thread/BlockableEventLoop.java
+--- a/net/minecraft/util/thread/BlockableEventLoop.java
++++ b/net/minecraft/util/thread/BlockableEventLoop.java
+@@ -1,5 +1,6 @@
+ package net.minecraft.util.thread;
+ 
++import ca.spottedleaf.moonrise.common.util.TickThread;
+ import com.google.common.collect.ImmutableList;
+ import com.google.common.collect.Queues;
+ import com.mojang.jtracy.TracyClient;
+@@ -40,6 +41,7 @@
+ 
+     // Paper start
+     public final boolean executeAllRecentInternalTasks() {
++        this.snowball$requireNoWorldWorker("drain");
+         final int pending = this.pendingRunnables.size();
+ 
+         // note: due to possible recursive execution, we may execute more tasks than we want to
+@@ -120,6 +122,7 @@
+     }
+ 
+     public void executeBlocking(final Runnable runnable) {
++        this.snowball$requireNoWorldWorker("wait on");
+         if (!this.isSameThread()) {
+             this.submitAsync(runnable).join();
+         } else {
+@@ -184,4 +187,5 @@
+     }
+ 
+     public void managedBlock(final BooleanSupplier condition) {
++        this.snowball$requireNoWorldWorker("managed-block on");
+         this.blockingCount++;
+@@ -197,6 +201,12 @@
+         }
+     }
+ 
++    private void snowball$requireNoWorldWorker(final String operation) {
++        if (TickThread.isWorldTickThread()) {
++            throw new IllegalStateException("A world tick worker cannot " + operation + " event loop " + this.name);
++        }
++    }
++
+     protected void waitForTasks() {
+         Thread.yield();
+         LockSupport.parkNanos("waiting for tasks", 100000L);
+diff --git a/net/minecraft/world/level/NaturalSpawner.java b/net/minecraft/world/level/NaturalSpawner.java
+--- a/net/minecraft/world/level/NaturalSpawner.java
++++ b/net/minecraft/world/level/NaturalSpawner.java
+@@ -82,6 +82,17 @@ public final class NaturalSpawner {
+         final boolean countMobs
+     ) {
+         // Paper end - Optional per player mob spawns
+-        Iterable<Entity> entities = level.getAllEntities();
++        // SnowBall - the idle pilot must never enter the primary-thread entity enumeration.
++        final Iterable<Entity> entities;
++        if (ca.spottedleaf.moonrise.common.util.TickThread.isWorldTickThread()) {
++            ca.spottedleaf.moonrise.common.util.TickThread.ensureTickThread(level, "Cannot count mobs in a foreign world");
++            if (level.moonrise$getEntityLookup().getEntityCount() != 0) {
++                throw new IllegalStateException("Entities appeared during an idle world tick: " + level.dimension().identifier());
++            }
++            entities = List.of();
++        } else {
++            entities = level.getAllEntities();
++        }
++        // SnowBall end - restricted idle world tick
+         PotentialCalculator spawnPotential = new PotentialCalculator();
+         Object2IntOpenHashMap<MobCategory> mobCounts = new Object2IntOpenHashMap<>();

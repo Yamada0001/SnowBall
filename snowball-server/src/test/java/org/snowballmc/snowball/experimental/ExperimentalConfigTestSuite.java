@@ -54,6 +54,22 @@ class ExperimentalConfigTestSuite {
     }
 
     @Test
+    void acceptsWorldTickingOnlyWithAnExplicitValidOptIn() {
+        YamlConfiguration yaml = new YamlConfiguration();
+        assertFalse(ExperimentalConfig.parse(yaml, 4, false, warning -> fail(warning)).world().enabled());
+        yaml.set("async.parallel-world-ticking.enable", true);
+        yaml.set("async.parallel-world-ticking.thread-count", 2);
+        var world = ExperimentalConfig.parse(yaml, 4, false, warning -> fail(warning)).world();
+        assertTrue(world.requested());
+        assertTrue(world.enabled());
+        assertEquals(2, world.threadCount());
+        yaml.set("async.auto-thread-allocation", true);
+        var warnings = new ArrayList<String>();
+        assertFalse(ExperimentalConfig.parse(yaml, 4, false, warnings::add).world().enabled());
+        assertTrue(warnings.stream().anyMatch(warning -> warning.contains("auto-thread-allocation")));
+    }
+
+    @Test
     void refusesUnsafeValuesWithoutDisablingOtherModules() {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("async.parallel-world-ticking.enable", true);

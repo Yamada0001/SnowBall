@@ -63,11 +63,8 @@ public final class ExperimentalConfig {
         return Collections.unmodifiableMap(result);
     }
 
-    public record World(boolean requested, int threadCount, boolean logContainerCreationStacktraces,
-                        boolean usePerWorldTpsBar, boolean showTpsOfServerInsteadOfWorld) {
-        // No world ownership transfer has been validated on this Paper baseline.
-        public boolean enabled() { return false; }
-    }
+    public record World(boolean requested, boolean enabled, int threadCount, boolean logContainerCreationStacktraces,
+                        boolean usePerWorldTpsBar, boolean showTpsOfServerInsteadOfWorld) {}
     public record Sensors(boolean enabled, int maxThreads, List<Integer> affinity) {}
     public record Culling(boolean enabled, int threads, int checkIntervalMs, int maxTraceDistance,
                           double forceVisibleRadius, long visibilityTimeoutMs, double aabbExpansion,
@@ -95,11 +92,11 @@ public final class ExperimentalConfig {
             }
             startupValues = values;
             current = parsed;
-            if (Boolean.TRUE.equals(values.get(WORLD + "enable"))) {
-                LeavesLogger.LOGGER.warn("{}: parallel world ticking is not supported; worlds remain on the server thread. World ticking worker count is 0; other world options are inactive.", path);
+            if (parsed.world().enabled()) {
+                LeavesLogger.LOGGER.warn("{}: experimental parallel world ticking requested. Only eligible worlds use workers; all other ticks remain serial.", path);
             }
-            LeavesLogger.LOGGER.info("{}: world ticking requested={}, enabled=false, threads=0; sensors requested={}, enabled={}, threads={}; culling requested={}, enabled={}, threads={}", path,
-                values.get(WORLD + "enable"),
+            LeavesLogger.LOGGER.info("{}: world ticking requested={}, config accepted={}, configured workers={}; sensors requested={}, enabled={}, threads={}; culling requested={}, enabled={}, threads={}", path,
+                values.get(WORLD + "enable"), parsed.world().enabled(), parsed.world().threadCount(),
                 values.get(SENSORS + "enable"), parsed.sensors().enabled(), parsed.sensors().maxThreads(),
                 values.get(CULLING + "enabled"), parsed.culling().enabled(), parsed.culling().threads());
         } catch (IOException | InvalidConfigurationException e) {
@@ -234,7 +231,7 @@ public final class ExperimentalConfig {
             if (!id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) ray.invalid(CULLING + "skipped-entity-types", "invalid entity identifier: " + string);
             else skipped.add(id);
         }
-        return new Settings(new World(worldEnabled && world.valid, worldThreads, log, tps, globalTps),
+        return new Settings(new World(worldEnabled, worldEnabled && world.valid, worldThreads, log, tps, globalTps),
             new Sensors(sensorEnabled && sensing.valid, Math.min(MAX_WORKERS, sensorThreads), List.of()),
             new Culling(cull && ray.valid, cullThreads > 0 ? cullThreads : Math.clamp(processors / 8, 1, 4), interval,
                 distance, radius, visible, expansion, box, players, markers, List.copyOf(skipped)));

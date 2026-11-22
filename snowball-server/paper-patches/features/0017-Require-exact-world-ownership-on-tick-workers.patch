@@ -1,0 +1,127 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Require exact world ownership on tick workers
+
+World workers are never primary tick threads, even in a bound task. Only
+checks that name a world can admit a worker, and only during its exact
+ServerLevel's tick. Keep all existing enforcement and primary semantics.
+
+diff --git a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+--- a/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
++++ b/src/main/java/ca/spottedleaf/moonrise/common/util/TickThread.java
+@@ -2,5 +2,6 @@
+ 
+ import net.minecraft.core.BlockPos;
++import net.minecraft.server.level.ServerLevel;
+ import net.minecraft.world.entity.Entity;
+ import net.minecraft.world.level.ChunkPos;
+ import net.minecraft.world.level.Level;
+@@ -8,5 +9,6 @@
+ import net.minecraft.world.phys.Vec3;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
++import org.snowballmc.snowball.experimental.world.ParallelWorldTicker;
+ 
+ import java.util.concurrent.atomic.AtomicInteger;
+@@ -118,55 +120,88 @@
+         return (TickThread)Thread.currentThread();
+     }
+ 
++    // SnowBall start - parallel world ownership
++    public static final class WorldTickThread extends TickThread {
++        public WorldTickThread(final Runnable run, final String name) {
++            super(run, name);
++        }
++    }
++
++    public static boolean isWorldTickThread() {
++        return Thread.currentThread() instanceof WorldTickThread;
++    }
++
+     public static boolean isTickThread() {
+-        return Thread.currentThread() instanceof TickThread;
++        final Thread thread = Thread.currentThread();
++        return thread instanceof TickThread && !(thread instanceof WorldTickThread);
+     }
+ 
++    public static boolean isTickThreadFor(final Level world) {
++        final Thread thread = Thread.currentThread();
++        if (thread instanceof WorldTickThread) {
++            return world instanceof ServerLevel && ParallelWorldTicker.owns(world);
++        }
++        return thread instanceof TickThread;
++    }
++
++    public static void ensureTickThread(final Level world, final String reason) {
++        if (!isTickThreadFor(world)) {
++            final String ex = "Thread failed world owner check: " + reason + ", context=" + getThreadContext()
++                + ", world=" + (world == null ? "<none>" : WorldUtil.getWorldName(world));
++            LOGGER.error(ex, new Throwable());
++            throw new IllegalStateException(ex);
++        }
++    }
++    // SnowBall end - parallel world ownership
++
+     public static boolean isShutdownThread() {
+         return false;
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final BlockPos pos) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final BlockPos pos, final int blockRadius) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final ChunkPos pos) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final Vec3 pos) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int chunkX, final int chunkZ) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final AABB aabb) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final double blockX, final double blockZ) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final Vec3 position, final Vec3 deltaMovement, final int buffer) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int fromChunkX, final int fromChunkZ, final int toChunkX, final int toChunkZ) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Level world, final int chunkX, final int chunkZ, final int radius) {
+-        return isTickThread();
++        return isTickThreadFor(world); // SnowBall - parallel world ownership
+     }
+ 
+     public static boolean isTickThreadFor(final Entity entity) {
+-        return isTickThread();
++        if (!isWorldTickThread()) {
++            return isTickThread();
++        }
++        return entity != null && isTickThreadFor(entity.level());
+     }
+ }

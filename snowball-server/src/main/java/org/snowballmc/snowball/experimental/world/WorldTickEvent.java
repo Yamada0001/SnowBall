@@ -8,7 +8,7 @@ import jdk.jfr.Label;
 import jdk.jfr.Name;
 import jdk.jfr.StackTrace;
 
-/** Wall-clock duration of one serial world tick, not its tick rate. */
+/** Wall-clock duration of one world tick, on either the coordinator or a worker, not its tick rate. */
 @Name(WorldTickEvent.NAME)
 @Label("World Tick")
 @Category({"SnowBall", "Ticking"})

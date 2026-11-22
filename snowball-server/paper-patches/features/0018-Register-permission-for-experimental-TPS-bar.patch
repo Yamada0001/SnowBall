@@ -1,0 +1,20 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: SnowBall Contributors <dev@snowballmc.org>
+Date: Sun, 22 Nov 2026 00:00:00 +0000
+Subject: [PATCH] Register permission for experimental TPS bar
+
+The command's Brigadier requirement still applies independently of Bukkit's
+permission. Allow players to toggle their own display when opted in.
+
+diff --git a/src/main/java/org/bukkit/craftbukkit/util/permissions/CommandPermissions.java b/src/main/java/org/bukkit/craftbukkit/util/permissions/CommandPermissions.java
+--- a/src/main/java/org/bukkit/craftbukkit/util/permissions/CommandPermissions.java
++++ b/src/main/java/org/bukkit/craftbukkit/util/permissions/CommandPermissions.java
+@@ -91,7 +91,8 @@ public final class CommandPermissions {
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "test", "Allows the user to manage and execute GameTests", PermissionDefault.OP, commands);
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "tick", "Allows the user to control the tick rate of the server", PermissionDefault.OP, commands);
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "time", "Allows the user to change or query the world's game time", PermissionDefault.OP, commands);
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "title", "Allows the user to manage screen titles", PermissionDefault.OP, commands);
++        DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "tpsbar", "Allows the player to toggle their experimental TPS bar", PermissionDefault.TRUE, commands); // SnowBall
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "transfer", "Allows the user to transfer to another server", PermissionDefault.OP, commands);
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "version", "Shows info related to the server version", PermissionDefault.OP, commands);
+         DefaultPermissions.registerPermission(CommandPermissions.PREFIX + "waypoint", "Allows the management of a waypoints on the server/locator bar", PermissionDefault.OP, commands);
